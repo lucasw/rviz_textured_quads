@@ -5,7 +5,7 @@ project(rviz_textured_quads)
 ## this package depends at build time
 find_package(catkin REQUIRED COMPONENTS roscpp rospy roslib std_msgs sensor_msgs shape_msgs rviz pluginlib class_loader cv_bridge message_generation geometry_msgs sensor_msgs cmake_modules eigen_conversions roslint rviz)
 
-find_package(Eigen REQUIRED)
+find_package(Eigen3 REQUIRED)
 find_package(OpenGL REQUIRED)
 
 roslint_cpp()
