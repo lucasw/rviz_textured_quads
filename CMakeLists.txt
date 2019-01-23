@@ -109,3 +109,7 @@ install(TARGETS ${TEXTURED_QUAD_LIB}  # ${TEXTURED_QUAD_LIB}_core
 install(FILES
   mesh_display_custom_plugin_description.xml
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
+
+install(FILES
+  tests/textures/Decal_filter.png
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/tests/textures/)
