@@ -153,7 +153,7 @@ void MeshDisplayCustom::addDecalToMaterial(int index, const Ogre::String& matNam
   {
     resource_manager.createResourceGroup(resource_group_name);
     resource_manager.addResourceLocation(ros::package::getPath("rviz_textured_quads") +
-        "/tests/textures/", "FileSystem", resource_group_name, false);
+        "/textures/", "FileSystem", resource_group_name, false);
     resource_manager.initialiseResourceGroup(resource_group_name);
   }
   // loads files into our resource manager
