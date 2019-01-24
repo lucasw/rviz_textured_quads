@@ -3,7 +3,7 @@ project(rviz_textured_quads)
 
 ## Find catkin and any catkin packages on which
 ## this package depends at build time
-find_package(catkin REQUIRED COMPONENTS roscpp rospy roslib std_msgs sensor_msgs shape_msgs rviz pluginlib class_loader cv_bridge message_generation geometry_msgs sensor_msgs cmake_modules eigen_conversions roslint rviz)
+find_package(catkin REQUIRED COMPONENTS roscpp rospy roslib std_msgs sensor_msgs shape_msgs rviz pluginlib class_loader message_generation geometry_msgs sensor_msgs cmake_modules eigen_conversions roslint rviz)
 
 find_package(Eigen3 REQUIRED)
 find_package(OpenGL REQUIRED)
@@ -61,7 +61,6 @@ catkin_package(
 #     rviz
 #     pluginlib
 #     class_loader
-#     cv_bridge
 #   	geometry_msgs
 #   	sensor_msgs
 #   	eigen_conversions

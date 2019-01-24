@@ -42,10 +42,7 @@
 #include <OGRE/OgreMovableObject.h>
 #include <OGRE/OgreSceneManager.h>
 #include <OGRE/OgreSceneNode.h>
-#include <cv_bridge/cv_bridge.h>
 #include <image_transport/camera_common.h>
-#include <opencv2/highgui/highgui.hpp>
-#include <opencv2/imgproc/imgproc.hpp>
 #include <rviz/display_context.h>
 #include <rviz/properties/float_property.h>
 #include <rviz/properties/ros_topic_property.h>
@@ -253,7 +250,7 @@ void MeshDisplayCustom::constructQuads(const sensor_msgs::Image::ConstPtr& image
 
   int q = 0;
   {
-    processImage(q, *image);
+    processImage(q, image);
 
     geometry_msgs::Pose mesh_origin;
 
@@ -523,11 +520,6 @@ void MeshDisplayCustom::update(float wall_dt, float ros_dt)
       setStatus(StatusProperty::Error, "Display Image", e.c_str());
       return;
     }
-    catch (cv_bridge::Exception& e)
-    {
-      setStatus(StatusProperty::Error, "Display Image", e.what());
-      return;
-    }
     updateMeshProperties();
     // TODO(lucasw) do what is necessary for new image, but separate
     // other stuff.
@@ -722,34 +714,13 @@ void MeshDisplayCustom::reset()
   clear();
 }
 
-void MeshDisplayCustom::processImage(int index, const sensor_msgs::Image& msg)
+void MeshDisplayCustom::processImage(int index, const sensor_msgs::Image::ConstPtr& msg)
 {
-  // std::cout<<"camera image received"<<std::endl;
-  cv_bridge::CvImagePtr cv_ptr;
-
-  // simply converting every image to RGBA
-  cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::RGBA8);
-
-  // update image alpha
-  // for(int i = 0; i < cv_ptr->image.rows; i++)
-  // {
-  //     for(int j = 0; j < cv_ptr->image.cols; j++)
-  //     {
-  //         cv::Vec4b& pixel = cv_ptr->image.at<cv::Vec4b>(i,j);
-  //         pixel[3] = image_alpha_property_->getFloat()*255;
-  //     }
-  // }
-
-  // add completely white transparent border to the image so that it won't replicate colored pixels all over the mesh
-  cv::Scalar value(255, 255, 255, 0);
-  cv::copyMakeBorder(cv_ptr->image, cv_ptr->image, 1, 1, 1, 1, cv::BORDER_CONSTANT, value);
-  cv::flip(cv_ptr->image, cv_ptr->image, -1);
-
   // Output modified video stream
   if (textures_ == NULL)
     textures_ = new ROSImageTexture();
 
-  textures_->addMessage(cv_ptr->toImageMsg());
+  textures_->addMessage(msg);
 }
 
 }  // namespace rviz

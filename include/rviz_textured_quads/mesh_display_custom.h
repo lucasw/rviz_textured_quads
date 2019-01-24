@@ -111,7 +111,7 @@ protected:
   virtual void onDisable();
 
   // This is called by incomingMessage().
-  void processImage(int index, const sensor_msgs::Image& msg);
+  void processImage(int index, const sensor_msgs::Image::ConstPtr& msg);
 
   virtual void subscribe();
   virtual void unsubscribe();
