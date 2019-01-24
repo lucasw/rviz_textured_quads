@@ -84,10 +84,29 @@ MeshDisplayCustom::MeshDisplayCustom()
       QString::fromStdString(ros::message_traits::datatype<sensor_msgs::Image>()),
       "Image topic to subscribe to.",
       this, SLOT(updateDisplayImages()));
-  // TODO(lucasw) add controls to switch which plane to align to?
+
   tf_frame_property_ = new TfFrameProperty("Quad Frame", "map",
       "Align the image quad to the xy plane of this tf frame",
       this, 0, true);
+
+  plane_property_ = new rviz::EnumProperty("Align plane", "XY", "Align plane", this);
+  plane_property_->addOption("XY", 0);
+  plane_property_->addOption("XZ", 1);
+  plane_property_->addOption("YX", 2);
+  plane_property_->addOption("YZ", 3);
+  plane_property_->addOption("ZX", 4);
+  plane_property_->addOption("ZY", 5);
+  plane_property_->addOption("Quaternion", 6);
+
+  quaternion_property_ = new QuaternionProperty(
+      "Quaternion",
+      Ogre::Quaternion::IDENTITY,
+      "Quaternion orientation of the plane", this);
+
+  mirror_x_property_ = new BoolProperty("Horisontal flip", false, "Flip image horisontal", this);
+  mirror_y_property_ = new BoolProperty("Vertical flip", false, "Flip image vertical", this);
+  mirror_z_property_ = new BoolProperty("Rotate 180", false, "Rotate image 180 degrees", this);
+
 
   meters_per_pixel_property_ = new FloatProperty("Meters per pixel", 0.002,
       "Rviz meters per image pixel.", this);
@@ -108,6 +127,11 @@ MeshDisplayCustom::~MeshDisplayCustom()
   // TODO(lucasw) clean up other things
   delete image_topic_property_;
   delete tf_frame_property_;
+  delete plane_property_;
+  delete quaternion_property_;
+  delete mirror_x_property_;
+  delete mirror_y_property_;
+  delete mirror_z_property_;
   delete meters_per_pixel_property_;
 }
 
@@ -279,10 +303,32 @@ void MeshDisplayCustom::constructQuads(const sensor_msgs::Image::ConstPtr& image
     mesh_origin.orientation.y = orientation[2];
     mesh_origin.orientation.z = orientation[3];
 
-    // Rotate from x-y to x-z plane:
     Eigen::Affine3d trans_mat;
     tf::poseMsgToEigen(mesh_origin, trans_mat);
-    trans_mat = trans_mat * Eigen::Quaterniond(0.70710678, -0.70710678f, 0.0f, 0.0f);
+
+    Ogre::Quaternion quaternion = quaternion_property_->getQuaternion();
+    switch( plane_property_->getOptionInt() ){
+	// xy
+	case 0:  trans_mat = trans_mat * Eigen::Quaterniond(0.70710678f, -0.70710678f, 0.0f, 0.0f);
+		 break;
+	// xz
+	case 1:  break;
+	// yx
+	case 2:	 trans_mat = trans_mat * Eigen::Quaterniond(0.5f, 0.5f, 0.5f, 0.5f);
+		 break;
+	// yz
+	case 3:  trans_mat = trans_mat * Eigen::Quaterniond(0.70710678f, 0.0f, 0.0f, 0.70710678f);
+		 break;
+	// zx
+	case 4:  trans_mat = trans_mat * Eigen::Quaterniond(0.0f, 0.70710678f, 0.0f, 0.70710678f);
+		 break;
+	// zy
+	case 5:	 trans_mat = trans_mat * Eigen::Quaterniond(0.5f, -0.5f, -0.5f, -0.5f);
+		 break;
+	// quaternion
+	default: trans_mat = trans_mat * Eigen::Quaterniond(quaternion.w, quaternion.x, quaternion.y, quaternion.z);
+		 break;
+    }
 
     Eigen::Quaterniond xz_quat(trans_mat.rotation());
     mesh_origin.orientation.x = xz_quat.x();
@@ -520,6 +566,7 @@ void MeshDisplayCustom::update(float wall_dt, float ros_dt)
       setStatus(StatusProperty::Error, "Display Image", e.c_str());
       return;
     }
+
     updateMeshProperties();
     // TODO(lucasw) do what is necessary for new image, but separate
     // other stuff.
@@ -592,11 +639,16 @@ void MeshDisplayCustom::updateCamera(bool update_image)
       mesh_poses_[index].orientation.x, mesh_poses_[index].orientation.y,
       mesh_poses_[index].orientation.z);
 
-  // Update orientation with 90 deg offset (xy to xz)
-  orientation = orientation * Ogre::Quaternion(Ogre::Degree(-90), Ogre::Vector3::UNIT_X);
+  const bool mirror_x = mirror_x_property_->getBool();
+  const bool mirror_y = mirror_y_property_->getBool();
+  const bool mirror_z = mirror_z_property_->getBool();
 
-  // convert vision (Z-forward) frame to ogre frame (Z-out)
-  orientation = orientation * Ogre::Quaternion(Ogre::Degree(180), Ogre::Vector3::UNIT_Z);
+  // Update orientation according to switches 
+  orientation = orientation * Ogre::Quaternion(Ogre::Degree(mirror_x ? 90 : -90), Ogre::Vector3::UNIT_X);
+
+  orientation = orientation * Ogre::Quaternion(Ogre::Degree(mirror_y ? 0 : 180), Ogre::Vector3::UNIT_Y);
+
+  orientation = orientation * Ogre::Quaternion(Ogre::Degree(mirror_z ? 180 : 0), Ogre::Vector3::UNIT_Z);
 
 
   // std::cout << "CameraInfo dimensions: " << last_info_->width << " x " << last_info_->height << std::endl;

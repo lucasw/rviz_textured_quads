@@ -55,6 +55,7 @@
 #include <rviz/frame_manager.h>
 #include <rviz/image/image_display_base.h>
 #include <rviz/image/ros_image_texture.h>
+#include <rviz/properties/quaternion_property.h>
 #include <sensor_msgs/CameraInfo.h>
 #include <sensor_msgs/Image.h>
 #include <shape_msgs/Mesh.h>
@@ -131,6 +132,15 @@ private:
 
   RosTopicProperty* image_topic_property_;
   TfFrameProperty* tf_frame_property_;
+
+  QuaternionProperty* quaternion_property_;
+  EnumProperty* plane_property_;
+
+  BoolProperty* mirror_x_property_;
+  BoolProperty* mirror_y_property_;
+  BoolProperty* mirror_z_property_;
+
+
   FloatProperty* meters_per_pixel_property_;
   ros::Subscriber image_sub_;
 
