@@ -166,7 +166,7 @@ void MeshDisplayCustom::addDecalToMaterial(int index, const Ogre::String& matNam
   mat->setCullingMode(Ogre::CULL_NONE);
   Ogre::Pass* pass = mat->getTechnique(0)->createPass();
 
-  pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+  //pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
   pass->setDepthBias(1);
   // pass->setLightingEnabled(true);
 
