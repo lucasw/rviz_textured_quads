@@ -3,9 +3,9 @@ project(rviz_textured_quads)
 
 ## Find catkin and any catkin packages on which
 ## this package depends at build time
-find_package(catkin REQUIRED COMPONENTS roscpp rospy roslib std_msgs sensor_msgs shape_msgs rviz pluginlib class_loader cv_bridge message_generation geometry_msgs sensor_msgs cmake_modules eigen_conversions roslint rviz)
+find_package(catkin REQUIRED COMPONENTS roscpp rospy roslib std_msgs sensor_msgs shape_msgs rviz pluginlib class_loader message_generation geometry_msgs sensor_msgs cmake_modules eigen_conversions roslint rviz)
 
-find_package(Eigen REQUIRED)
+find_package(Eigen3 REQUIRED)
 find_package(OpenGL REQUIRED)
 
 roslint_cpp()
@@ -61,7 +61,6 @@ catkin_package(
 #     rviz
 #     pluginlib
 #     class_loader
-#     cv_bridge
 #   	geometry_msgs
 #   	sensor_msgs
 #   	eigen_conversions
@@ -102,10 +101,11 @@ install(TARGETS ${TEXTURED_QUAD_LIB}  # ${TEXTURED_QUAD_LIB}_core
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION})
 
-# install(DIRECTORY textures
-#   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/rviz_textured_quads
-# )
+install(DIRECTORY textures
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+)
 
 install(FILES
   mesh_display_custom_plugin_description.xml
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
+

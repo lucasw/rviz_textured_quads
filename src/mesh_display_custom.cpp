@@ -42,10 +42,7 @@
 #include <OGRE/OgreMovableObject.h>
 #include <OGRE/OgreSceneManager.h>
 #include <OGRE/OgreSceneNode.h>
-#include <cv_bridge/cv_bridge.h>
 #include <image_transport/camera_common.h>
-#include <opencv2/highgui/highgui.hpp>
-#include <opencv2/imgproc/imgproc.hpp>
 #include <rviz/display_context.h>
 #include <rviz/properties/float_property.h>
 #include <rviz/properties/ros_topic_property.h>
@@ -87,10 +84,29 @@ MeshDisplayCustom::MeshDisplayCustom()
       QString::fromStdString(ros::message_traits::datatype<sensor_msgs::Image>()),
       "Image topic to subscribe to.",
       this, SLOT(updateDisplayImages()));
-  // TODO(lucasw) add controls to switch which plane to align to?
+
   tf_frame_property_ = new TfFrameProperty("Quad Frame", "map",
       "Align the image quad to the xy plane of this tf frame",
       this, 0, true);
+
+  plane_property_ = new rviz::EnumProperty("Align plane", "XY", "Align plane", this);
+  plane_property_->addOption("XY", 0);
+  plane_property_->addOption("XZ", 1);
+  plane_property_->addOption("YX", 2);
+  plane_property_->addOption("YZ", 3);
+  plane_property_->addOption("ZX", 4);
+  plane_property_->addOption("ZY", 5);
+  plane_property_->addOption("Quaternion", 6);
+
+  quaternion_property_ = new QuaternionProperty(
+      "Quaternion",
+      Ogre::Quaternion::IDENTITY,
+      "Quaternion orientation of the plane", this);
+
+  mirror_x_property_ = new BoolProperty("Horisontal flip", false, "Flip image horisontal", this);
+  mirror_y_property_ = new BoolProperty("Vertical flip", false, "Flip image vertical", this);
+  mirror_z_property_ = new BoolProperty("Rotate 180", false, "Rotate image 180 degrees", this);
+
 
   meters_per_pixel_property_ = new FloatProperty("Meters per pixel", 0.002,
       "Rviz meters per image pixel.", this);
@@ -111,6 +127,11 @@ MeshDisplayCustom::~MeshDisplayCustom()
   // TODO(lucasw) clean up other things
   delete image_topic_property_;
   delete tf_frame_property_;
+  delete plane_property_;
+  delete quaternion_property_;
+  delete mirror_x_property_;
+  delete mirror_y_property_;
+  delete mirror_z_property_;
   delete meters_per_pixel_property_;
 }
 
@@ -145,7 +166,7 @@ void MeshDisplayCustom::addDecalToMaterial(int index, const Ogre::String& matNam
   mat->setCullingMode(Ogre::CULL_NONE);
   Ogre::Pass* pass = mat->getTechnique(0)->createPass();
 
-  pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+  //pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
   pass->setDepthBias(1);
   // pass->setLightingEnabled(true);
 
@@ -156,7 +177,7 @@ void MeshDisplayCustom::addDecalToMaterial(int index, const Ogre::String& matNam
   {
     resource_manager.createResourceGroup(resource_group_name);
     resource_manager.addResourceLocation(ros::package::getPath("rviz_textured_quads") +
-        "/tests/textures/", "FileSystem", resource_group_name, false);
+        "/textures/", "FileSystem", resource_group_name, false);
     resource_manager.initialiseResourceGroup(resource_group_name);
   }
   // loads files into our resource manager
@@ -253,7 +274,7 @@ void MeshDisplayCustom::constructQuads(const sensor_msgs::Image::ConstPtr& image
 
   int q = 0;
   {
-    processImage(q, *image);
+    processImage(q, image);
 
     geometry_msgs::Pose mesh_origin;
 
@@ -282,10 +303,32 @@ void MeshDisplayCustom::constructQuads(const sensor_msgs::Image::ConstPtr& image
     mesh_origin.orientation.y = orientation[2];
     mesh_origin.orientation.z = orientation[3];
 
-    // Rotate from x-y to x-z plane:
     Eigen::Affine3d trans_mat;
     tf::poseMsgToEigen(mesh_origin, trans_mat);
-    trans_mat = trans_mat * Eigen::Quaterniond(0.70710678, -0.70710678f, 0.0f, 0.0f);
+
+    Ogre::Quaternion quaternion = quaternion_property_->getQuaternion();
+    switch( plane_property_->getOptionInt() ){
+	// xy
+	case 0:  trans_mat = trans_mat * Eigen::Quaterniond(0.70710678f, -0.70710678f, 0.0f, 0.0f);
+		 break;
+	// xz
+	case 1:  break;
+	// yx
+	case 2:	 trans_mat = trans_mat * Eigen::Quaterniond(0.5f, 0.5f, 0.5f, 0.5f);
+		 break;
+	// yz
+	case 3:  trans_mat = trans_mat * Eigen::Quaterniond(0.70710678f, 0.0f, 0.0f, 0.70710678f);
+		 break;
+	// zx
+	case 4:  trans_mat = trans_mat * Eigen::Quaterniond(0.0f, 0.70710678f, 0.0f, 0.70710678f);
+		 break;
+	// zy
+	case 5:	 trans_mat = trans_mat * Eigen::Quaterniond(0.5f, -0.5f, -0.5f, -0.5f);
+		 break;
+	// quaternion
+	default: trans_mat = trans_mat * Eigen::Quaterniond(quaternion.w, quaternion.x, quaternion.y, quaternion.z);
+		 break;
+    }
 
     Eigen::Quaterniond xz_quat(trans_mat.rotation());
     mesh_origin.orientation.x = xz_quat.x();
@@ -523,11 +566,7 @@ void MeshDisplayCustom::update(float wall_dt, float ros_dt)
       setStatus(StatusProperty::Error, "Display Image", e.c_str());
       return;
     }
-    catch (cv_bridge::Exception& e)
-    {
-      setStatus(StatusProperty::Error, "Display Image", e.what());
-      return;
-    }
+
     updateMeshProperties();
     // TODO(lucasw) do what is necessary for new image, but separate
     // other stuff.
@@ -600,11 +639,16 @@ void MeshDisplayCustom::updateCamera(bool update_image)
       mesh_poses_[index].orientation.x, mesh_poses_[index].orientation.y,
       mesh_poses_[index].orientation.z);
 
-  // Update orientation with 90 deg offset (xy to xz)
-  orientation = orientation * Ogre::Quaternion(Ogre::Degree(-90), Ogre::Vector3::UNIT_X);
+  const bool mirror_x = mirror_x_property_->getBool();
+  const bool mirror_y = mirror_y_property_->getBool();
+  const bool mirror_z = mirror_z_property_->getBool();
 
-  // convert vision (Z-forward) frame to ogre frame (Z-out)
-  orientation = orientation * Ogre::Quaternion(Ogre::Degree(180), Ogre::Vector3::UNIT_Z);
+  // Update orientation according to switches 
+  orientation = orientation * Ogre::Quaternion(Ogre::Degree(mirror_x ? 90 : -90), Ogre::Vector3::UNIT_X);
+
+  orientation = orientation * Ogre::Quaternion(Ogre::Degree(mirror_y ? 0 : 180), Ogre::Vector3::UNIT_Y);
+
+  orientation = orientation * Ogre::Quaternion(Ogre::Degree(mirror_z ? 180 : 0), Ogre::Vector3::UNIT_Z);
 
 
   // std::cout << "CameraInfo dimensions: " << last_info_->width << " x " << last_info_->height << std::endl;
@@ -722,34 +766,13 @@ void MeshDisplayCustom::reset()
   clear();
 }
 
-void MeshDisplayCustom::processImage(int index, const sensor_msgs::Image& msg)
+void MeshDisplayCustom::processImage(int index, const sensor_msgs::Image::ConstPtr& msg)
 {
-  // std::cout<<"camera image received"<<std::endl;
-  cv_bridge::CvImagePtr cv_ptr;
-
-  // simply converting every image to RGBA
-  cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::RGBA8);
-
-  // update image alpha
-  // for(int i = 0; i < cv_ptr->image.rows; i++)
-  // {
-  //     for(int j = 0; j < cv_ptr->image.cols; j++)
-  //     {
-  //         cv::Vec4b& pixel = cv_ptr->image.at<cv::Vec4b>(i,j);
-  //         pixel[3] = image_alpha_property_->getFloat()*255;
-  //     }
-  // }
-
-  // add completely white transparent border to the image so that it won't replicate colored pixels all over the mesh
-  cv::Scalar value(255, 255, 255, 0);
-  cv::copyMakeBorder(cv_ptr->image, cv_ptr->image, 1, 1, 1, 1, cv::BORDER_CONSTANT, value);
-  cv::flip(cv_ptr->image, cv_ptr->image, -1);
-
   // Output modified video stream
   if (textures_ == NULL)
     textures_ = new ROSImageTexture();
 
-  textures_->addMessage(cv_ptr->toImageMsg());
+  textures_->addMessage(msg);
 }
 
 }  // namespace rviz
