@@ -58,7 +58,8 @@
 #include <sensor_msgs/CameraInfo.h>
 #include <sensor_msgs/Image.h>
 #include <shape_msgs/Mesh.h>
-#include <std_msgs/Float64.h>
+// #include <std_msgs/Float64.h>
+#include <std_msgs/String.h>
 #include <tf/message_filter.h>
 #include <tf/tf.h>
 #include <tf/transform_listener.h>
@@ -101,6 +102,8 @@ public:
 
 private Q_SLOTS:
   void updateMeshProperties();
+  void updateImageTopic();
+  void updateDisplayImageTopic();
   void updateDisplayImages();
 
 protected:
@@ -113,6 +116,8 @@ protected:
   // This is called by incomingMessage().
   void processImage(int index, const sensor_msgs::Image& msg);
 
+  virtual void subscribeselector();
+  virtual void unsubscribeselector();
   virtual void subscribe();
   virtual void unsubscribe();
 
@@ -123,15 +128,18 @@ private:
   void createProjector(int index);
   void addDecalToMaterial(int index, const Ogre::String& matName);
 
+  void updateImageTopic (const std_msgs::String& imagetopic);
   void updateImage(const sensor_msgs::Image::ConstPtr& image);
   void constructQuads(const sensor_msgs::Image::ConstPtr& images);
 
   shape_msgs::Mesh constructMesh(geometry_msgs::Pose mesh_origin, float width, float height, float border_size);
   void clearStates();
 
+  RosTopicProperty* image_topic_selector_property_;
   RosTopicProperty* image_topic_property_;
   TfFrameProperty* tf_frame_property_;
   FloatProperty* meters_per_pixel_property_;
+  ros::Subscriber image_topic_sub_;
   ros::Subscriber image_sub_;
 
   std::vector<shape_msgs::Mesh> last_meshes_;

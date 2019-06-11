@@ -58,6 +58,7 @@
 #include <rviz/visualization_manager.h>
 #include <rviz_textured_quads/mesh_display_custom.h>
 #include <sensor_msgs/image_encodings.h>
+#include <std_msgs/String.h>
 #include <string>
 #include <vector>
 
@@ -83,6 +84,10 @@ MeshDisplayCustom::MeshDisplayCustom()
   , decal_frustums_(NULL)
   , new_image_(false)
 {
+  image_topic_selector_property_ = new RosTopicProperty("Image Topic Selector", "",
+      QString::fromStdString(ros::message_traits::datatype<std_msgs::String>()),
+      "Image topic selector to subscribe to.",
+      this, SLOT(updateDisplayImageTopic()));
   image_topic_property_ = new RosTopicProperty("Image Topic", "",
       QString::fromStdString(ros::message_traits::datatype<sensor_msgs::Image>()),
       "Image topic to subscribe to.",
@@ -412,6 +417,63 @@ void MeshDisplayCustom::updateMeshProperties()
 
     context_->queueRender();
   }
+}
+
+void MeshDisplayCustom::updateImageTopic(const std_msgs::String& imagetopic)
+{
+  if (!isEnabled())
+  {
+    return;
+  }
+
+  if (imagetopic.data.c_str())
+  {
+    try
+    {
+      unsubscribe();
+      image_sub_ = nh_.subscribe(imagetopic.data.c_str(),
+                                 1, &MeshDisplayCustom::updateImage, this);
+      setStatus(StatusProperty::Ok, "Display Images Topic", "ok");
+    }
+    catch (ros::Exception& e)
+    {
+      subscribe();
+      setStatus(StatusProperty::Error, "Display Images Topic", QString("Error subscribing: ") + e.what());
+    }
+  }
+}
+
+void MeshDisplayCustom::updateDisplayImageTopic()
+{
+  subscribeselector();
+  unsubscribeselector();
+}
+
+void MeshDisplayCustom::subscribeselector()
+{
+  if (!isEnabled())
+  {
+    return;
+  }
+
+  if (!image_topic_selector_property_->getTopic().isEmpty())
+  {
+    try
+    {
+      image_topic_sub_ = nh_.subscribe(image_topic_selector_property_->getTopicStd(),
+          1, &MeshDisplayCustom::updateImageTopic, this);
+      setStatus(StatusProperty::Ok, "Image Topic Selector", "ok");
+    }
+    catch (ros::Exception& e)
+    {
+      setStatus(StatusProperty::Error, "Image Topic Selector", QString("Error subscribing: ") + e.what());
+    }
+  }
+}
+
+void MeshDisplayCustom::unsubscribeselector()
+{
+  image_topic_sub_.shutdown();
 }
 
 void MeshDisplayCustom::updateDisplayImages()
