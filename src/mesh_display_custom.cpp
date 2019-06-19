@@ -92,6 +92,7 @@ MeshDisplayCustom::MeshDisplayCustom()
       QString::fromStdString(ros::message_traits::datatype<sensor_msgs::Image>()),
       "Image topic to subscribe to.",
       this, SLOT(updateDisplayImages()));
+  image_transparent_property_ = 0;
   // TODO(lucasw) add controls to switch which plane to align to?
   tf_frame_property_ = new TfFrameProperty("Quad Frame", "map",
       "Align the image quad to the xy plane of this tf frame",
@@ -281,9 +282,15 @@ void MeshDisplayCustom::constructQuads(const sensor_msgs::Image::ConstPtr& image
       throw ss.str();
     }
 
-    mesh_origin.position.x = position[0];
-    mesh_origin.position.y = position[1];
-    mesh_origin.position.z = position[2];
+    if (image_transparent_property_ == 1) {
+      mesh_origin.position.x = 100;
+      mesh_origin.position.y = 100;
+      mesh_origin.position.z = 100;
+    } else  {
+      mesh_origin.position.x = position[0];
+      mesh_origin.position.y = position[1];
+      mesh_origin.position.z = position[2];
+    }
     mesh_origin.orientation.w = orientation[0];
     mesh_origin.orientation.x = orientation[1];
     mesh_origin.orientation.y = orientation[2];
@@ -428,8 +435,10 @@ void MeshDisplayCustom::updateImageTopic(const std_msgs::String& imagetopic)
     return;
   }
 
-  if (imagetopic.data.c_str())
-  {
+  if (strcmp(imagetopic.data.c_str(), "transparent") == 0) {
+    image_transparent_property_ = 1;
+  } else if (imagetopic.data.c_str()) {
+    image_transparent_property_ = 0;
     try
     {
       image_sub_ = nh_.subscribe(imagetopic.data.c_str(),
@@ -488,10 +497,7 @@ void MeshDisplayCustom::subscribe()
     return;
   }
 
-  if (image_topic_property_->getTopic() == "transparent") {
-    image_transparent_property_ = 1;
-  } else if (!image_topic_property_->getTopic().isEmpty()) {
-    image_transparent_property_ = 0;
+  if (!image_topic_property_->getTopic().isEmpty()) {
     try
     {
       image_sub_ = nh_.subscribe(image_topic_property_->getTopicStd(),
@@ -758,7 +764,6 @@ void MeshDisplayCustom::updateCamera(bool update_image)
   // ROS_INFO(" Camera (%f, %f)", proj_matrix[0][0], proj_matrix[1][1]);
   // ROS_INFO(" Render Panel: %x   Viewport: %x", render_panel_, render_panel_->getViewport());
 
-
   setStatus(StatusProperty::Ok, "Time", "ok");
   setStatus(StatusProperty::Ok, "Camera Info", "ok");
 
@@ -792,18 +797,6 @@ void MeshDisplayCustom::processImage(int index, const sensor_msgs::Image& msg)
 
   // simply converting every image to RGBA
   cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::RGBA8);
-
-  // make transparent if subscribed image topic is transparent
-  if (image_transparent_property_) {
-    for(int i = 0; i < cv_ptr->image.rows; i++)
-    {
-        for(int j = 0; j < cv_ptr->image.cols; j++)
-        {
-            cv::Vec4b& pixel = cv_ptr->image.at<cv::Vec4b>(i,j);
-            pixel[3] = 0;
-        }
-    }
-  }
 
   // add completely white transparent border to the image so that it won't 
   // replicate colored pixels all over the mesh
