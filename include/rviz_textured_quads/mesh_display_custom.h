@@ -135,6 +135,7 @@ private:
   shape_msgs::Mesh constructMesh(geometry_msgs::Pose mesh_origin, float width, float height, float border_size);
   void clearStates();
 
+  uint8_t image_transparent_property_;
   RosTopicProperty* image_topic_selector_property_;
   RosTopicProperty* image_topic_property_;
   TfFrameProperty* tf_frame_property_;

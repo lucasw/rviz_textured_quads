@@ -445,8 +445,8 @@ void MeshDisplayCustom::updateImageTopic(const std_msgs::String& imagetopic)
 
 void MeshDisplayCustom::updateDisplayImageTopic()
 {
-  subscribeselector();
   unsubscribeselector();
+  subscribeselector();
 }
 
 void MeshDisplayCustom::subscribeselector()
@@ -456,8 +456,7 @@ void MeshDisplayCustom::subscribeselector()
     return;
   }
 
-  if (!image_topic_selector_property_->getTopic().isEmpty())
-  {
+if (!image_topic_selector_property_->getTopic().isEmpty()) {
     try
     {
       image_topic_sub_ = nh_.subscribe(image_topic_selector_property_->getTopicStd(),
@@ -489,8 +488,10 @@ void MeshDisplayCustom::subscribe()
     return;
   }
 
-  if (!image_topic_property_->getTopic().isEmpty())
-  {
+  if (image_topic_property_->getTopic() == "transparent") {
+    image_transparent_property_ = 1;
+  } else if (!image_topic_property_->getTopic().isEmpty()) {
+    image_transparent_property_ = 0;
     try
     {
       image_sub_ = nh_.subscribe(image_topic_property_->getTopicStd(),
@@ -792,17 +793,20 @@ void MeshDisplayCustom::processImage(int index, const sensor_msgs::Image& msg)
   // simply converting every image to RGBA
   cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::RGBA8);
 
-  // update image alpha
-  // for(int i = 0; i < cv_ptr->image.rows; i++)
-  // {
-  //     for(int j = 0; j < cv_ptr->image.cols; j++)
-  //     {
-  //         cv::Vec4b& pixel = cv_ptr->image.at<cv::Vec4b>(i,j);
-  //         pixel[3] = image_alpha_property_->getFloat()*255;
-  //     }
-  // }
+  // make transparent if subscribed image topic is transparent
+  if (image_transparent_property_) {
+    for(int i = 0; i < cv_ptr->image.rows; i++)
+    {
+        for(int j = 0; j < cv_ptr->image.cols; j++)
+        {
+            cv::Vec4b& pixel = cv_ptr->image.at<cv::Vec4b>(i,j);
+            pixel[3] = 0;
+        }
+    }
+  }
 
-  // add completely white transparent border to the image so that it won't replicate colored pixels all over the mesh
+  // add completely white transparent border to the image so that it won't 
+  // replicate colored pixels all over the mesh
   cv::Scalar value(255, 255, 255, 0);
   cv::copyMakeBorder(cv_ptr->image, cv_ptr->image, 1, 1, 1, 1, cv::BORDER_CONSTANT, value);
   cv::flip(cv_ptr->image, cv_ptr->image, -1);
