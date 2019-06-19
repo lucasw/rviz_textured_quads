@@ -104,6 +104,7 @@ MeshDisplayCustom::MeshDisplayCustom()
 MeshDisplayCustom::~MeshDisplayCustom()
 {
   unsubscribe();
+  unsubscribeselector();
   // TODO(lucasw) switch to smart pointers
   delete manual_objects_;
   delete decal_frustums_;
@@ -114,6 +115,7 @@ MeshDisplayCustom::~MeshDisplayCustom()
     delete filter_frustums_[i];
 
   // TODO(lucasw) clean up other things
+  delete image_topic_selector_property_;
   delete image_topic_property_;
   delete tf_frame_property_;
   delete meters_per_pixel_property_;
@@ -430,14 +432,12 @@ void MeshDisplayCustom::updateImageTopic(const std_msgs::String& imagetopic)
   {
     try
     {
-      unsubscribe();
       image_sub_ = nh_.subscribe(imagetopic.data.c_str(),
                                  1, &MeshDisplayCustom::updateImage, this);
       setStatus(StatusProperty::Ok, "Display Images Topic", "ok");
     }
     catch (ros::Exception& e)
     {
-      subscribe();
       setStatus(StatusProperty::Error, "Display Images Topic", QString("Error subscribing: ") + e.what());
     }
   }
