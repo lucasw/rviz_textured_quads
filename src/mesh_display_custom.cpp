@@ -287,9 +287,11 @@ void MeshDisplayCustom::constructQuads(const sensor_msgs::Image::ConstPtr& image
       mesh_origin.position.y = 100;
       mesh_origin.position.z = 100;
     } else  {
-      mesh_origin.position.x = position[0];
+      // Place the image farther forward so it is not obstructed by the robot
+      mesh_origin.position.x = position[0] + 1;
       mesh_origin.position.y = position[1];
-      mesh_origin.position.z = position[2];
+      // Raise image in the z-axis so it is not obstructed by the robot
+      mesh_origin.position.z = position[2] + 0.5;
     }
     mesh_origin.orientation.w = orientation[0];
     mesh_origin.orientation.x = orientation[1];
