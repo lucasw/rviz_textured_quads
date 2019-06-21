@@ -84,6 +84,8 @@ MeshDisplayCustom::MeshDisplayCustom()
   , decal_frustums_(NULL)
   , new_image_(false)
 {
+  // used to alternatively subscribe to a topic publishing std_smgs::String in
+  // order to programmatically change the image topic on a given mesh
   image_topic_selector_property_ = new RosTopicProperty("Image Topic Selector", "",
       QString::fromStdString(ros::message_traits::datatype<std_msgs::String>()),
       "Image topic selector to subscribe to.",
@@ -283,15 +285,14 @@ void MeshDisplayCustom::constructQuads(const sensor_msgs::Image::ConstPtr& image
     }
 
     if (image_transparent_property_ == 1) {
+      // hacky: gets rid of weird rectangle when transparent by moving it away
       mesh_origin.position.x = 100;
       mesh_origin.position.y = 100;
       mesh_origin.position.z = 100;
     } else  {
-      // Place the image farther forward so it is not obstructed by the robot
-      mesh_origin.position.x = position[0] + 1;
+      mesh_origin.position.x = position[0];
       mesh_origin.position.y = position[1];
-      // Raise image in the z-axis so it is not obstructed by the robot
-      mesh_origin.position.z = position[2] + 0.5;
+      mesh_origin.position.z = position[2];
     }
     mesh_origin.orientation.w = orientation[0];
     mesh_origin.orientation.x = orientation[1];
@@ -799,6 +800,17 @@ void MeshDisplayCustom::processImage(int index, const sensor_msgs::Image& msg)
 
   // simply converting every image to RGBA
   cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::RGBA8);
+
+  // make image transparent if transparency property is set
+  if (image_transparent_property_ == 1)
+  for(int i = 0; i < cv_ptr->image.rows; i++)
+  {
+      for(int j = 0; j < cv_ptr->image.cols; j++)
+      {
+          cv::Vec4b& pixel = cv_ptr->image.at<cv::Vec4b>(i,j);
+          pixel[3] = 0;
+      }
+  }
 
   // add completely white transparent border to the image so that it won't 
   // replicate colored pixels all over the mesh
