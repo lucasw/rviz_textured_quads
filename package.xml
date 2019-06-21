@@ -8,7 +8,7 @@
   <author email="mohit@u.nus.edu">Mohit Shridhar</author>
 
   <buildtool_depend>catkin</buildtool_depend>
-  
+
   <build_depend>roscpp</build_depend>
   <build_depend>rospy</build_depend>
   <build_depend>roslib</build_depend>
@@ -39,7 +39,7 @@
   <run_depend>message_runtime</run_depend>
   <run_depend>geometry_msgs</run_depend>
   <run_depend>sensor_msgs</run_depend>
-  <run_depend>cmake_modules</run_depend> 
+  <run_depend>cmake_modules</run_depend>
   <run_depend>eigen_conversions</run_depend>
   <run_depend>rviz</run_depend>
 

@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="use_static_tf" default="true" />
+
+  <node pkg="rviz" type="rviz" name="rviz_textured_quads"
+      args="-d $(find rviz_textured_quads)/config/rviz_textured_quads.rviz"
+      output="screen"/>
+
+  <node pkg="tf" type="static_transform_publisher" name="quad_broadcaster"
+      args="0.1 -0.1 0.7 0.01 0.7 0.1 camera1 quad 30"
+      if="$(arg use_static_tf)" />
+
+  <group ns="camera1">
+  <node pkg="tf" type="static_transform_publisher" name="camera_broadcaster"
+      args="0.1 0.1 -1.5 0 0 0 1 map camera1 30"
+      if="$(arg use_static_tf)" />
+  <node name="camera_info" pkg="rostopic" type="rostopic"
+      args="pub camera_info sensor_msgs/CameraInfo
+     '{header: {seq: 0, stamp: {secs: 0, nsecs: 0}, frame_id: 'camera1'},
+      height: 480, width: 640, distortion_model: 'plumb_bob',
+      D: [0],
+      K: [500.0, 0.0, 320, 0.0, 500.0, 240.0, 0.0, 0.0, 1.0],
+      R: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+      P: [500.0, 0.0, 320, 0.0, 0.0, 500, 240, 0.0, 0.0, 0.0, 1.0, 0.0],
+      binning_x: 0, binning_y: 0,
+      roi: {x_offset: 0, y_offset: 0, height: 480, width: 640, do_rectify: false}}' -r 2"
+      output="screen"/>
+  </group>
+
+</launch>

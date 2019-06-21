@@ -1,4 +1,4 @@
-/*
+/* Copyright (c) 2013-2015 Team ViGIR ( TORC Robotics LLC, TU Darmstadt, Virginia Tech, Oregon State University, Cornell University, and Leibniz University Hanover )
  * MeshDisplayCustom class implementation.
  *
  * Author: Felipe Bacim.
@@ -37,742 +37,795 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <OGRE/OgreSceneNode.h>
-#include <OGRE/OgreSceneManager.h> 
-#include <OGRE/OgreMovableObject.h>
-#include <OGRE/OgreMaterialManager.h>
 #include <OGRE/OgreFrustum.h>
-
-#include "rviz/display_context.h"
-#include "rviz/robot/robot.h"
-#include "rviz/robot/tf_link_updater.h"
-#include "rviz/properties/color_property.h"
-#include "rviz/properties/vector_property.h"
-#include "rviz/properties/ros_topic_property.h"
-#include "rviz/properties/float_property.h"
-#include "rviz/properties/string_property.h"
-#include "rviz/properties/quaternion_property.h"
-#include "rviz/render_panel.h"
-#include "rviz/validate_floats.h"
-#include "rviz/view_manager.h"
-#include "rviz/visualization_manager.h"
-
-#include <image_transport/camera_common.h>
-
-#include <sensor_msgs/image_encodings.h>
+#include <OGRE/OgreMaterialManager.h>
+#include <OGRE/OgreMovableObject.h>
+#include <OGRE/OgreSceneManager.h>
+#include <OGRE/OgreSceneNode.h>
 #include <cv_bridge/cv_bridge.h>
-#include <opencv2/imgproc/imgproc.hpp>
+#include <image_transport/camera_common.h>
 #include <opencv2/highgui/highgui.hpp>
-
-#include "mesh_display_custom.h"
+#include <opencv2/imgproc/imgproc.hpp>
+#include <rviz/display_context.h>
+#include <rviz/properties/float_property.h>
+#include <rviz/properties/ros_topic_property.h>
+#include <rviz/properties/tf_frame_property.h>
+#include <rviz/render_panel.h>
+#include <rviz/robot/robot.h>
+#include <rviz/robot/tf_link_updater.h>
+#include <rviz/validate_floats.h>
+#include <rviz/view_manager.h>
+#include <rviz/visualization_manager.h>
+#include <rviz_textured_quads/mesh_display_custom.h>
+#include <sensor_msgs/image_encodings.h>
+#include <std_msgs/String.h>
+#include <string>
+#include <vector>
 
 namespace rviz
 {
 
 bool validateFloats(const sensor_msgs::CameraInfo& msg)
 {
-    bool valid = true;
-    valid = valid && validateFloats( msg.D );
-    valid = valid && validateFloats( msg.K );
-    valid = valid && validateFloats( msg.R );
-    valid = valid && validateFloats( msg.P );
-    return valid;
+  bool valid = true;
+  valid = valid && validateFloats(msg.D);
+  valid = valid && validateFloats(msg.K);
+  valid = valid && validateFloats(msg.R);
+  valid = valid && validateFloats(msg.P);
+  return valid;
 }
 
 MeshDisplayCustom::MeshDisplayCustom()
-    : Display()
-    , time_since_last_transform_( 0.0f )
-    , initialized_(false)
+  : Display()
+  , mesh_nodes_(NULL)
+  , textures_(NULL)
+  , projector_nodes_(NULL)
+  , manual_objects_(NULL)
+  , decal_frustums_(NULL)
+  , new_image_(false)
 {
-    display_images_topic_property_ = new RosTopicProperty( "Display Images Topic", "",
-                                            QString::fromStdString( ros::message_traits::datatype<rviz_textured_quads::TexturedQuadArray>() ),
-                                            "shape_msgs::Mesh topic to subscribe to.",
-                                            this, SLOT( updateDisplayImages() ));
+  // used to alternatively subscribe to a topic publishing std_smgs::String in
+  // order to programmatically change the image topic on a given mesh
+  image_topic_selector_property_ = new RosTopicProperty("Image Topic Selector", "",
+      QString::fromStdString(ros::message_traits::datatype<std_msgs::String>()),
+      "Image topic selector to subscribe to.",
+      this, SLOT(updateDisplayImageTopic()));
+  image_topic_property_ = new RosTopicProperty("Image Topic", "",
+      QString::fromStdString(ros::message_traits::datatype<sensor_msgs::Image>()),
+      "Image topic to subscribe to.",
+      this, SLOT(updateDisplayImages()));
+  image_transparent_property_ = 0;
+  // TODO(lucasw) add controls to switch which plane to align to?
+  tf_frame_property_ = new TfFrameProperty("Quad Frame", "map",
+      "Align the image quad to the xy plane of this tf frame",
+      this, 0, true);
 
-    text_color_property_ = new ColorProperty (  "Text Color", QColor( 255, 255, 255 ),
-                                              "caption color.", this, SLOT( updateMeshProperties() )  );
-
-    text_height_property_ = new FloatProperty( "Text Height", 0.1f,
-                                              "font size of caption", this, SLOT( updateMeshProperties() ) );
-
-    text_bottom_offset_ =  new FloatProperty( "Text Bottom Offset", 0.18f,
-                                              "text placement offset below", this, SLOT( updateMeshProperties() ) );
+  meters_per_pixel_property_ = new FloatProperty("Meters per pixel", 0.002,
+      "Rviz meters per image pixel.", this);
 }
 
 MeshDisplayCustom::~MeshDisplayCustom()
 {
-    unsubscribe();
+  unsubscribe();
+  unsubscribeselector();
+  // TODO(lucasw) switch to smart pointers
+  delete manual_objects_;
+  delete decal_frustums_;
+  delete textures_;
+  delete mesh_nodes_;
 
-    // TODO: Why am I doing this? switch to shared ptrs Argh!!!!!! 
+  for (size_t i = 0; i < filter_frustums_.size(); ++i)
+    delete filter_frustums_[i];
 
-    // clear manual objects
-    for (std::vector<Ogre::ManualObject*>::iterator it = manual_objects_.begin() ; it != manual_objects_.end(); ++it)
-    {
-      delete (*it);
-    } 
-    manual_objects_.clear();
-
-    // clear decal frustrums
-    for (std::vector<Ogre::Frustum*>::iterator it = decal_frustums_.begin() ; it != decal_frustums_.end(); ++it)
-    {
-      delete (*it);
-    } 
-    decal_frustums_.clear();
-
-    // clear textures
-    for (std::vector<ROSImageTexture*>::iterator it = textures_.begin() ; it != textures_.end(); ++it)
-    {
-      delete (*it);
-    } 
-    textures_.clear();
-
-    // clear textures
-    for (std::vector<Ogre::SceneNode*>::iterator it = mesh_nodes_.begin() ; it != mesh_nodes_.end(); ++it)
-    {
-      delete (*it);
-    } 
-    mesh_nodes_.clear();
-
-    // clear text nodes
-    for (std::vector<rviz_textured_quads::TextNode*>::iterator it = text_nodes_.begin() ; it != text_nodes_.end(); ++it)
-    {
-      delete (*it);
-    } 
-    text_nodes_.clear();
-
-    // TODO: clean up other things
+  // TODO(lucasw) clean up other things
+  delete image_topic_selector_property_;
+  delete image_topic_property_;
+  delete tf_frame_property_;
+  delete meters_per_pixel_property_;
 }
 
 void MeshDisplayCustom::onInitialize()
 {
-    Display::onInitialize();
+  tf_frame_property_->setFrameManager(context_->getFrameManager());
+  Display::onInitialize();
 }
 
 void MeshDisplayCustom::createProjector(int index)
 {
-    decal_frustums_[index] = new Ogre::Frustum();
+  decal_frustums_ = new Ogre::Frustum();
 
-    projector_nodes_[index] = scene_manager_->getRootSceneNode()->createChildSceneNode();
-    projector_nodes_[index]->attachObject(decal_frustums_[index]);
+  projector_nodes_ = scene_manager_->getRootSceneNode()->createChildSceneNode();
+  projector_nodes_->attachObject(decal_frustums_);
 
-    Ogre::SceneNode* filter_node;
+  Ogre::SceneNode* filter_node;
 
-    //back filter
-    filter_frustums_[index].push_back(new Ogre::Frustum());
-    filter_frustums_[index].back()->setProjectionType(Ogre::PT_ORTHOGRAPHIC);
-    filter_node = projector_nodes_[index]->createChildSceneNode();
-    filter_node->attachObject(filter_frustums_[index].back());
-    filter_node->setOrientation(Ogre::Quaternion(Ogre::Degree(90),Ogre::Vector3::UNIT_Y));
+  // back filter
+  for (size_t i = 0; i < filter_frustums_.size(); ++i)
+    delete filter_frustums_[i];
+  filter_frustums_.push_back(new Ogre::Frustum());
+  filter_frustums_.back()->setProjectionType(Ogre::PT_ORTHOGRAPHIC);
+  filter_node = projector_nodes_->createChildSceneNode();
+  filter_node->attachObject(filter_frustums_.back());
+  filter_node->setOrientation(Ogre::Quaternion(Ogre::Degree(90), Ogre::Vector3::UNIT_Y));
 }
 
 void MeshDisplayCustom::addDecalToMaterial(int index, const Ogre::String& matName)
 {
-    Ogre::MaterialPtr mat = (Ogre::MaterialPtr)Ogre::MaterialManager::getSingleton().getByName(matName);
-    mat->setCullingMode(Ogre::CULL_NONE);
-    Ogre::Pass* pass = mat->getTechnique(0)->createPass();
+  Ogre::MaterialPtr mat = (Ogre::MaterialPtr)Ogre::MaterialManager::getSingleton().getByName(matName);
+  mat->setCullingMode(Ogre::CULL_NONE);
+  Ogre::Pass* pass = mat->getTechnique(0)->createPass();
 
-    pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
-    pass->setDepthBias(1);
-    //pass->setLightingEnabled(true);
+  pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+  pass->setDepthBias(1);
+  // pass->setLightingEnabled(true);
 
-    // need the decal_filter to avoid back projection
-    Ogre::String resource_group_name = "decal_textures_folder";
-    Ogre::ResourceGroupManager& resource_manager = Ogre::ResourceGroupManager::getSingleton();
-    if(!resource_manager.resourceGroupExists(resource_group_name))
-    {
-        resource_manager.createResourceGroup(resource_group_name);
-        resource_manager.addResourceLocation(ros::package::getPath("rviz_textured_quads")+"/tests/textures/", "FileSystem", resource_group_name, false);
-        resource_manager.initialiseResourceGroup(resource_group_name);
-    }
-    // loads files into our resource manager
-    resource_manager.loadResourceGroup(resource_group_name);
+  // need the decal_filter to avoid back projection
+  Ogre::String resource_group_name = "decal_textures_folder";
+  Ogre::ResourceGroupManager& resource_manager = Ogre::ResourceGroupManager::getSingleton();
+  if (!resource_manager.resourceGroupExists(resource_group_name))
+  {
+    resource_manager.createResourceGroup(resource_group_name);
+    resource_manager.addResourceLocation(ros::package::getPath("rviz_textured_quads") +
+        "/tests/textures/", "FileSystem", resource_group_name, false);
+    resource_manager.initialiseResourceGroup(resource_group_name);
+  }
+  // loads files into our resource manager
+  resource_manager.loadResourceGroup(resource_group_name);
 
-    Ogre::TextureUnitState* tex_state = pass->createTextureUnitState();//"Decal.png");
-    tex_state->setTextureName(textures_[index]->getTexture()->getName());
-    tex_state->setProjectiveTexturing(true, decal_frustums_[index]);
+  Ogre::TextureUnitState* tex_state = pass->createTextureUnitState();  // "Decal.png");
+  tex_state->setTextureName(textures_->getTexture()->getName());
+  tex_state->setProjectiveTexturing(true, decal_frustums_);
 
+  tex_state->setTextureAddressingMode(Ogre::TextureUnitState::TAM_CLAMP);
+  tex_state->setTextureFiltering(Ogre::FO_POINT, Ogre::FO_LINEAR, Ogre::FO_NONE);
+  tex_state->setColourOperation(Ogre::LBO_REPLACE);  // don't accept additional effects
+
+  for (int i = 0; i < filter_frustums_.size(); i++)
+  {
+    tex_state = pass->createTextureUnitState("Decal_filter.png");
+    tex_state->setProjectiveTexturing(true, filter_frustums_[i]);
     tex_state->setTextureAddressingMode(Ogre::TextureUnitState::TAM_CLAMP);
-    tex_state->setTextureFiltering(Ogre::FO_POINT, Ogre::FO_LINEAR, Ogre::FO_NONE);
-    tex_state->setColourOperation(Ogre::LBO_REPLACE); //don't accept additional effects
-
-    for(int i = 0; i < filter_frustums_[index].size(); i++)
-    {
-        tex_state = pass->createTextureUnitState("Decal_filter.png");
-        tex_state->setProjectiveTexturing(true, filter_frustums_[index][i]);
-        tex_state->setTextureAddressingMode(Ogre::TextureUnitState::TAM_CLAMP);
-        tex_state->setTextureFiltering(Ogre::TFO_NONE);
-    }
+    tex_state->setTextureFiltering(Ogre::TFO_NONE);
+  }
 }
 
-shape_msgs::Mesh MeshDisplayCustom::constructMesh( geometry_msgs::Pose mesh_origin, float width, float height, float border_size )
+shape_msgs::Mesh MeshDisplayCustom::constructMesh(geometry_msgs::Pose mesh_origin,
+    float width, float height, float border_size)
 {
-    shape_msgs::Mesh mesh;
+  shape_msgs::Mesh mesh;
 
+  Eigen::Affine3d trans_mat;
+  tf::poseMsgToEigen(mesh_origin, trans_mat);
+
+  // Rviz Coordinate System: x-right, y-forward, z-down
+  // create mesh vertices and tranform them to the specified pose
+
+  Eigen::Vector4d top_left(-width / 2.0f - border_size, 0.0f, -height / 2.0f - border_size, 1.0f);
+  Eigen::Vector4d top_right(width / 2.0f + border_size, 0.0f, -height / 2.0f - border_size, 1.0f);
+  Eigen::Vector4d bottom_left(-width / 2.0f - border_size, 0.0f, height / 2.0f + border_size, 1.0f);
+  Eigen::Vector4d bottom_right(width / 2.0f + border_size, 0.0f, height / 2.0f + border_size, 1.0f);
+
+  Eigen::Vector4d trans_top_left = trans_mat.matrix() * top_left;
+  Eigen::Vector4d trans_top_right = trans_mat.matrix() * top_right;
+  Eigen::Vector4d trans_bottom_left = trans_mat.matrix() * bottom_left;
+  Eigen::Vector4d trans_bottom_right = trans_mat.matrix() * bottom_right;
+
+  std::vector<geometry_msgs::Point> vertices(4);
+  vertices.at(0).x = trans_top_left[0];
+  vertices.at(0).y = trans_top_left[1];
+  vertices.at(0).z = trans_top_left[2];
+  vertices.at(1).x = trans_top_right[0];
+  vertices.at(1).y = trans_top_right[1];
+  vertices.at(1).z = trans_top_right[2];
+  vertices.at(2).x = trans_bottom_left[0];
+  vertices.at(2).y = trans_bottom_left[1];
+  vertices.at(2).z = trans_bottom_left[2];
+  vertices.at(3).x = trans_bottom_right[0];
+  vertices.at(3).y = trans_bottom_right[1];
+  vertices.at(3).z = trans_bottom_right[2];
+  mesh.vertices = vertices;
+
+  std::vector<shape_msgs::MeshTriangle> triangles(2);
+  triangles.at(0).vertex_indices[0] = 0;
+  triangles.at(0).vertex_indices[1] = 1;
+  triangles.at(0).vertex_indices[2] = 2;
+  triangles.at(1).vertex_indices[0] = 1;
+  triangles.at(1).vertex_indices[1] = 2;
+  triangles.at(1).vertex_indices[2] = 3;
+  mesh.triangles = triangles;
+
+  return mesh;
+}
+
+void MeshDisplayCustom::clearStates()
+{
+  if (manual_objects_)
+    manual_objects_->clear();
+
+  const int num_quads = 1;
+  // resize state vectors
+  mesh_poses_.resize(num_quads);
+
+  last_meshes_.resize(num_quads);
+
+  last_images_.resize(num_quads);
+
+  border_colors_.resize(4);
+  for (size_t i = 0; i < 4; ++i)
+  {
+    border_colors_[i] = 1.0;
+  }
+}
+
+void MeshDisplayCustom::constructQuads(const sensor_msgs::Image::ConstPtr& image)
+{
+  clearStates();
+
+  int q = 0;
+  {
+    processImage(q, *image);
+
+    geometry_msgs::Pose mesh_origin;
+
+    // TODO(lucasw) get pose from tf
+    std::string frame = tf_frame_property_->getFrameStd();
+    if (frame == "")
+    {
+      frame = image->header.frame_id;
+    }
+    // Lookup transform into fixed frame
+    Ogre::Vector3 position;
+    Ogre::Quaternion orientation;
+    if (!context_->getFrameManager()->getTransform(frame, ros::Time(0),
+        position, orientation))
+    {
+      std::stringstream ss;
+      ss << "Error transforming from fixed frame to frame " << frame.c_str();
+      throw ss.str();
+    }
+
+    if (image_transparent_property_ == 1) {
+      // hacky: gets rid of weird rectangle when transparent by moving it away
+      mesh_origin.position.x = 100;
+      mesh_origin.position.y = 100;
+      mesh_origin.position.z = 100;
+    } else  {
+      mesh_origin.position.x = position[0];
+      mesh_origin.position.y = position[1];
+      mesh_origin.position.z = position[2];
+    }
+    mesh_origin.orientation.w = orientation[0];
+    mesh_origin.orientation.x = orientation[1];
+    mesh_origin.orientation.y = orientation[2];
+    mesh_origin.orientation.z = orientation[3];
+
+    // Rotate from x-y to x-z plane:
     Eigen::Affine3d trans_mat;
     tf::poseMsgToEigen(mesh_origin, trans_mat);
+    trans_mat = trans_mat * Eigen::Quaterniond(0.70710678, -0.70710678f, 0.0f, 0.0f);
 
-    // Rviz Coordinate System: x-right, y-forward, z-down
-    // create mesh vertices and tranform them to the specified pose
+    Eigen::Quaterniond xz_quat(trans_mat.rotation());
+    mesh_origin.orientation.x = xz_quat.x();
+    mesh_origin.orientation.y = xz_quat.y();
+    mesh_origin.orientation.z = xz_quat.z();
+    mesh_origin.orientation.w = xz_quat.w();
 
-    Eigen::Vector4d top_left(-width/2.0f - border_size, 0.0f, -height/2.0f - border_size, 1.0f);
-    Eigen::Vector4d top_right(width/2.0f + border_size, 0.0f, -height/2.0f - border_size, 1.0f);
-    Eigen::Vector4d bottom_left(-width/2.0f - border_size, 0.0f, height/2.0f + border_size, 1.0f);
-    Eigen::Vector4d bottom_right(width/2.0f + border_size, 0.0f, height/2.0f + border_size, 1.0f);
-
-    Eigen::Vector4d trans_top_left = trans_mat.matrix() * top_left;
-    Eigen::Vector4d trans_top_right = trans_mat.matrix() * top_right;
-    Eigen::Vector4d trans_bottom_left = trans_mat.matrix() * bottom_left;
-    Eigen::Vector4d trans_bottom_right = trans_mat.matrix() * bottom_right;
-
-    std::vector<geometry_msgs::Point> vertices(4);
-    vertices.at(0).x = trans_top_left[0]; 
-    vertices.at(0).y = trans_top_left[1];  
-    vertices.at(0).z = trans_top_left[2];  
-    vertices.at(1).x = trans_top_right[0];
-    vertices.at(1).y = trans_top_right[1];
-    vertices.at(1).z = trans_top_right[2];
-    vertices.at(2).x = trans_bottom_left[0];
-    vertices.at(2).y = trans_bottom_left[1];
-    vertices.at(2).z = trans_bottom_left[2];
-    vertices.at(3).x = trans_bottom_right[0];
-    vertices.at(3).y = trans_bottom_right[1];
-    vertices.at(3).z = trans_bottom_right[2];
-    mesh.vertices = vertices;
-
-    std::vector<shape_msgs::MeshTriangle> triangles(2);
-    triangles.at(0).vertex_indices[0] = 0;
-    triangles.at(0).vertex_indices[1] = 1; 
-    triangles.at(0).vertex_indices[2] = 2; 
-    triangles.at(1).vertex_indices[0] = 1;
-    triangles.at(1).vertex_indices[1] = 2; 
-    triangles.at(1).vertex_indices[2] = 3; 
-    mesh.triangles = triangles;
-
-    return mesh;
-}
-
-void MeshDisplayCustom::clearStates(int num_quads)
-{
-    for (int q=0; q<manual_objects_.size(); q++)
+    const float meters_per_pixel = meters_per_pixel_property_->getFloat();
+    float width = 1.0;
+    float height = 1.0;
+    if (meters_per_pixel > 0)
     {
-        manual_objects_[q]->clear();
+      width = image->width * meters_per_pixel;
+      height = image->height * meters_per_pixel;
+    }
+    else
+    {
+      height = width * image->height / image->width;
     }
 
-    for (int q=0; q<text_nodes_.size(); q++)
+    // set properties
+    mesh_poses_[q] = mesh_origin;
+    img_widths_ = image->width;
+    img_heights_ = image->height;
+
+    // default border size (no border)
+    border_sizes_ = 0.0f;
+
+    shape_msgs::Mesh mesh = constructMesh(mesh_origin, width, height, border_sizes_);
+
+    physical_widths_ = width;
+    physical_heights_ = height;
+
+    boost::mutex::scoped_lock lock(mesh_mutex_);
+
+    // create our scenenode and material
+    load();
+
+    if (!manual_objects_)
     {
-        text_nodes_[q]->clear();
+      static uint32_t count = 0;
+      std::stringstream ss;
+      ss << "MeshObject" << count++ << "Index" << q;
+      manual_objects_ = context_->getSceneManager()->createManualObject(ss.str());
+      mesh_nodes_->attachObject(manual_objects_);
     }
 
-    // resize state vectors   
-    mesh_poses_.resize(num_quads);
-    img_widths_.resize(num_quads);
-    img_heights_.resize(num_quads);
-    physical_widths_.resize(num_quads);
-    physical_heights_.resize(num_quads);
-
-    manual_objects_.resize(num_quads);
-    last_meshes_.resize(num_quads);
-    
-    last_images_.resize(num_quads);
-    textures_.resize(num_quads);
-    decal_frustums_.resize(num_quads);
-    projector_nodes_.resize(num_quads);
-    filter_frustums_.resize(num_quads);
-    mesh_materials_.resize(num_quads);
-    mesh_nodes_.resize(num_quads);
-    text_nodes_.resize(num_quads);
-
-    border_colors_.resize(num_quads);
-    border_sizes_.resize(num_quads);  
-}
-
-void MeshDisplayCustom::constructQuads( const rviz_textured_quads::TexturedQuadArray::ConstPtr& images )
-{
-    int num_quads = images->quads.size();
-
-    clearStates(num_quads);
-
-    for (int q=0; q<num_quads; q++)
+    // If we have the same number of tris as previously, just update the object
+    if (last_meshes_[q].vertices.size() > 0 && mesh.vertices.size() * 2 == last_meshes_[q].vertices.size())
     {
-        processImage(q, images->quads[q].image);
-
-        geometry_msgs::Pose mesh_origin = images->quads[q].pose;
-
-        // Rotate from x-y to x-z plane:
-        Eigen::Affine3d trans_mat;
-        tf::poseMsgToEigen(mesh_origin, trans_mat);
-        trans_mat = trans_mat * Eigen::Quaterniond(0.70710678, -0.70710678f, 0.0f, 0.0f);
-        
-        Eigen::Quaterniond xz_quat(trans_mat.rotation());
-        mesh_origin.orientation.x = xz_quat.x();
-        mesh_origin.orientation.y = xz_quat.y();
-        mesh_origin.orientation.z = xz_quat.z();
-        mesh_origin.orientation.w = xz_quat.w();
-
-        float width = images->quads[q].width;
-        float height = images->quads[q].height;
-
-        // set properties
-        mesh_poses_[q] = mesh_origin;
-        img_widths_[q] = images->quads[q].image.width;
-        img_heights_[q] = images->quads[q].image.height;
-
-        border_colors_[q].resize(4);
-
-        if (images->quads[q].border_color.size() == 4) 
-        {
-            border_colors_[q][0] = images->quads[q].border_color[0];
-            border_colors_[q][1] = images->quads[q].border_color[1];
-            border_colors_[q][2] = images->quads[q].border_color[2];
-            border_colors_[q][3] = images->quads[q].border_color[3];
-        }
-        else
-        {
-            // default white border
-            border_colors_[q][0] = 255.0f;
-            border_colors_[q][1] = 255.0f;
-            border_colors_[q][2] = 255.0f;
-            border_colors_[q][3] = 255.0f;
-        }
-
-        if (images->quads[q].border_size >= 0.0f)
-        {
-            border_sizes_[q] = images->quads[q].border_size;
-        }
-        else
-        {
-            // default border size (no border)
-            border_sizes_[q] = 0.0f;
-        }
-
-        shape_msgs::Mesh mesh = constructMesh(mesh_origin, width, height, border_sizes_[q]);
-
-        physical_widths_[q] = width;
-        physical_heights_[q] = height;
-
-        boost::mutex::scoped_lock lock( mesh_mutex_ );
-
-        // create our scenenode and material
-        load(q);
-
-        Ogre::Vector3 caption_position = Ogre::Vector3(mesh_origin.position.x, mesh_origin.position.y + 0.5f*height + text_bottom_offset_->getFloat(), mesh_origin.position.z);
-
-        if (!manual_objects_[q])
-        {
-            static uint32_t count = 0;
-            std::stringstream ss;
-            ss << "MeshObject" << count++ << "Index" << q;
-            manual_objects_[q] = context_->getSceneManager()->createManualObject(ss.str());
-            mesh_nodes_[q]->attachObject(manual_objects_[q]);
-        }
-
-        // If we have the same number of tris as previously, just update the object
-        if (last_meshes_[q].vertices.size() > 0 && mesh.vertices.size()*2 == last_meshes_[q].vertices.size())
-        {
-            manual_objects_[q]->beginUpdate(0);
-        }
-        else // Otherwise clear it and begin anew
-        {
-            manual_objects_[q]->clear();
-            manual_objects_[q]->estimateVertexCount(mesh.vertices.size()*2);
-            manual_objects_[q]->begin(mesh_materials_[q]->getName(), Ogre::RenderOperation::OT_TRIANGLE_LIST);
-        }
-
-        const std::vector<geometry_msgs::Point>& points = mesh.vertices;
-        for(size_t i = 0; i < mesh.triangles.size(); i++)
-        {
-            // make sure we have front-face/back-face triangles
-            for(int side = 0; side < 2; side++)
-            {
-                std::vector<Ogre::Vector3> corners(3);
-                for(size_t c = 0; c < 3; c++)
-                {
-                    size_t corner = side ? 2-c : c; // order of corners if side == 1
-                    corners[corner] = Ogre::Vector3(points[mesh.triangles[i].vertex_indices[corner]].x, points[mesh.triangles[i].vertex_indices[corner]].y, points[mesh.triangles[i].vertex_indices[corner]].z);
-                }
-                Ogre::Vector3 normal = (corners[1] - corners[0]).crossProduct(corners[2] - corners[0]);
-                normal.normalise();
-
-                for(size_t c = 0; c < 3; c++)
-                {
-                    manual_objects_[q]->position(corners[c]);
-                    manual_objects_[q]->normal(normal);
-                }
-            }
-        }
-
-        manual_objects_[q]->end();
-
-        mesh_materials_[q]->setCullingMode(Ogre::CULL_NONE);
-
-        last_meshes_[q] = mesh;
-
-        Ogre::ColourValue text_color(text_color_property_->getColor().redF(), text_color_property_->getColor().greenF(), text_color_property_->getColor().blueF(), 1.0f);
-
-        if (!text_nodes_[q])
-        {
-            text_nodes_[q] = new rviz_textured_quads::TextNode(context_->getSceneManager(), manual_objects_[q]->getParentSceneNode(), caption_position);
-            text_nodes_[q]->setCaption(images->quads[q].caption);
-            text_nodes_[q]->setCharacterHeight(text_height_property_->getFloat());
-            text_nodes_[q]->setColor(text_color);
-        } 
-        else
-        {
-            text_nodes_[q]->setCaption(images->quads[q].caption);
-            text_nodes_[q]->setPosition(caption_position);
-            text_nodes_[q]->setCharacterHeight(text_height_property_->getFloat());
-            text_nodes_[q]->setColor(text_color);
-
-        }
-
+      manual_objects_->beginUpdate(0);
     }
+    else  // Otherwise clear it and begin anew
+    {
+      manual_objects_->clear();
+      manual_objects_->estimateVertexCount(mesh.vertices.size() * 2);
+      manual_objects_->begin(mesh_materials_->getName(), Ogre::RenderOperation::OT_TRIANGLE_LIST);
+    }
+
+    const std::vector<geometry_msgs::Point>& points = mesh.vertices;
+    for (size_t i = 0; i < mesh.triangles.size(); i++)
+    {
+      // make sure we have front-face/back-face triangles
+      for (int side = 0; side < 2; side++)
+      {
+        std::vector<Ogre::Vector3> corners(3);
+        for (size_t c = 0; c < 3; c++)
+        {
+          size_t corner = side ? 2 - c : c;  // order of corners if side == 1
+          corners[corner] = Ogre::Vector3(points[mesh.triangles[i].vertex_indices[corner]].x,
+              points[mesh.triangles[i].vertex_indices[corner]].y,
+              points[mesh.triangles[i].vertex_indices[corner]].z);
+        }
+        Ogre::Vector3 normal = (corners[1] - corners[0]).crossProduct(corners[2] - corners[0]);
+        normal.normalise();
+
+        for (size_t c = 0; c < 3; c++)
+        {
+          manual_objects_->position(corners[c]);
+          manual_objects_->normal(normal);
+        }
+      }
+    }
+
+    manual_objects_->end();
+
+    mesh_materials_->setCullingMode(Ogre::CULL_NONE);
+
+    last_meshes_[q] = mesh;
+  }
 }
 
-void MeshDisplayCustom::updateImageMeshes( const rviz_textured_quads::TexturedQuadArray::ConstPtr& images )
+void MeshDisplayCustom::updateImage(const sensor_msgs::Image::ConstPtr& image)
 {
-    constructQuads(images);
-    updateMeshProperties();
+  cur_image_ = image;
+  new_image_ = true;
 }
 
 void MeshDisplayCustom::updateMeshProperties()
 {
-    for (int i=0; i<mesh_materials_.size(); i++)
+  {
+    // update color/alpha
+    Ogre::Technique* technique = mesh_materials_->getTechnique(0);
+    Ogre::Pass* pass = technique->getPass(0);
+
+    Ogre::ColourValue self_illumination_color(0.0f, 0.0f, 0.0f, 0.0f);
+    pass->setSelfIllumination(self_illumination_color);
+
+    Ogre::ColourValue diffuse_color(0.0f, 0.0f, 0.0f, 1.0f);
+    pass->setDiffuse(diffuse_color);
+
+    Ogre::ColourValue ambient_color(border_colors_[0],
+        border_colors_[1], border_colors_[2], border_colors_[3]);
+    pass->setAmbient(ambient_color);
+
+    Ogre::ColourValue specular_color(0.0f, 0.0f, 0.0f, 1.0f);
+    pass->setSpecular(specular_color);
+
+    Ogre::Real shininess = 64.0f;
+    pass->setShininess(shininess);
+
+    pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+    pass->setDepthWriteEnabled(false);
+
+    context_->queueRender();
+  }
+}
+
+void MeshDisplayCustom::updateImageTopic(const std_msgs::String& imagetopic)
+{
+  if (!isEnabled())
+  {
+    return;
+  }
+
+  if (strcmp(imagetopic.data.c_str(), "transparent") == 0) {
+    image_transparent_property_ = 1;
+  } else if (imagetopic.data.c_str()) {
+    image_transparent_property_ = 0;
+    try
     {
-        // update color/alpha
-        Ogre::Technique* technique = mesh_materials_[i]->getTechnique(0);
-        Ogre::Pass* pass = technique->getPass(0);
-
-        Ogre::ColourValue self_illumination_color(0.0f, 0.0f, 0.0f, 0.0f);// border_colors_[i][3]);
-        pass->setSelfIllumination(self_illumination_color);
-
-        Ogre::ColourValue diffuse_color(0.0f, 0.0f, 0.0f, 1.0f/*border_colors_[i][0], border_colors_[i][1], border_colors_[i][2], border_colors_[i][3]*/);
-        pass->setDiffuse(diffuse_color);
-
-        Ogre::ColourValue ambient_color(border_colors_[i][0], border_colors_[i][1], border_colors_[i][2], border_colors_[i][3]);
-        pass->setAmbient(ambient_color);
-
-        Ogre::ColourValue specular_color(0.0f, 0.0f, 0.0f, 1.0f);
-        pass->setSpecular(specular_color);
-
-        Ogre::Real shininess = 64.0f;
-        pass->setShininess(shininess);
-
-        pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
-        pass->setDepthWriteEnabled(false);
-
-        context_->queueRender();
+      image_sub_ = nh_.subscribe(imagetopic.data.c_str(),
+                                 1, &MeshDisplayCustom::updateImage, this);
+      setStatus(StatusProperty::Ok, "Display Images Topic", "ok");
     }
+    catch (ros::Exception& e)
+    {
+      setStatus(StatusProperty::Error, "Display Images Topic", QString("Error subscribing: ") + e.what());
+    }
+  }
+}
 
+void MeshDisplayCustom::updateDisplayImageTopic()
+{
+  unsubscribeselector();
+  subscribeselector();
+}
+
+void MeshDisplayCustom::subscribeselector()
+{
+  if (!isEnabled())
+  {
+    return;
+  }
+
+if (!image_topic_selector_property_->getTopic().isEmpty()) {
+    try
+    {
+      image_topic_sub_ = nh_.subscribe(image_topic_selector_property_->getTopicStd(),
+          1, &MeshDisplayCustom::updateImageTopic, this);
+      setStatus(StatusProperty::Ok, "Image Topic Selector", "ok");
+    }
+    catch (ros::Exception& e)
+    {
+      setStatus(StatusProperty::Error, "Image Topic Selector", QString("Error subscribing: ") + e.what());
+    }
+  }
+}
+
+void MeshDisplayCustom::unsubscribeselector()
+{
+  image_topic_sub_.shutdown();
 }
 
 void MeshDisplayCustom::updateDisplayImages()
 {
-    unsubscribe();
-    subscribe();
+  unsubscribe();
+  subscribe();
 }
 
 void MeshDisplayCustom::subscribe()
 {
-    if ( !isEnabled() )
-    {
-        return;
-    }
+  if (!isEnabled())
+  {
+    return;
+  }
 
-    if( !display_images_topic_property_->getTopic().isEmpty() )
+  if (!image_topic_property_->getTopic().isEmpty()) {
+    try
     {
-        try
-        {
-            rviz_display_images_sub_ = nh_.subscribe(display_images_topic_property_->getTopicStd(), 1, &MeshDisplayCustom::updateImageMeshes, this);
-            setStatus( StatusProperty::Ok, "Display Images Topic", "OK" );
-        }
-        catch( ros::Exception& e )
-        {
-            setStatus( StatusProperty::Error, "Display Images Topic", QString( "Error subscribing: " ) + e.what() );
-        }
+      image_sub_ = nh_.subscribe(image_topic_property_->getTopicStd(),
+          1, &MeshDisplayCustom::updateImage, this);
+      setStatus(StatusProperty::Ok, "Display Images Topic", "ok");
     }
+    catch (ros::Exception& e)
+    {
+      setStatus(StatusProperty::Error, "Display Images Topic", QString("Error subscribing: ") + e.what());
+    }
+  }
 }
 
 void MeshDisplayCustom::unsubscribe()
 {
-    rviz_display_images_sub_.shutdown();
+  image_sub_.shutdown();
 }
 
-void MeshDisplayCustom::load(int index)
-{   
-    if(mesh_nodes_[index] != NULL)
-        return;
+void MeshDisplayCustom::load()
+{
+  if (mesh_nodes_ != NULL)
+    return;
 
-    static int count = 0;
-    std::stringstream ss;
-    ss << "MeshNode" << count++ << "GroupIndex" << index;
-    Ogre::MaterialManager& material_manager = Ogre::MaterialManager::getSingleton();
-    Ogre::String resource_group_name =  ss.str();
+  static int count = 0;
+  std::stringstream ss;
+  ss << "MeshNode" << count++;
+  Ogre::MaterialManager& material_manager = Ogre::MaterialManager::getSingleton();
+  Ogre::String resource_group_name =  ss.str();
 
-    Ogre::ResourceGroupManager& rg_mgr = Ogre::ResourceGroupManager::getSingleton();
+  Ogre::ResourceGroupManager& rg_mgr = Ogre::ResourceGroupManager::getSingleton();
 
-    Ogre::String material_name = resource_group_name+"MeshMaterial";
+  Ogre::String material_name = resource_group_name + "MeshMaterial";
 
-    if(!rg_mgr.resourceGroupExists(resource_group_name))
-    {
-        rg_mgr.createResourceGroup(resource_group_name);
+  if (!rg_mgr.resourceGroupExists(resource_group_name))
+  {
+    rg_mgr.createResourceGroup(resource_group_name);
 
-        mesh_materials_[index] = material_manager.create(material_name,resource_group_name);
-        Ogre::Technique* technique = mesh_materials_[index]->getTechnique(0);
-        Ogre::Pass* pass = technique->getPass(0);
+    mesh_materials_ = material_manager.create(material_name, resource_group_name);
+    Ogre::Technique* technique = mesh_materials_->getTechnique(0);
+    Ogre::Pass* pass = technique->getPass(0);
 
-        Ogre::ColourValue self_illumnation_color(0.0f, 0.0f, 0.0f, border_colors_[index][3]);
-        pass->setSelfIllumination(self_illumnation_color);
+    Ogre::ColourValue self_illumnation_color(0.0f, 0.0f, 0.0f, border_colors_[3]);
+    pass->setSelfIllumination(self_illumnation_color);
 
-        Ogre::ColourValue diffuse_color(border_colors_[index][0], border_colors_[index][1], border_colors_[index][2], border_colors_[index][3]);
-        pass->setDiffuse(diffuse_color);
+    Ogre::ColourValue diffuse_color(border_colors_[0],
+        border_colors_[1], border_colors_[2], border_colors_[3]);
+    pass->setDiffuse(diffuse_color);
 
-        Ogre::ColourValue ambient_color(border_colors_[index][0], border_colors_[index][1], border_colors_[index][2], border_colors_[index][3]);
-        pass->setAmbient(ambient_color);
+    Ogre::ColourValue ambient_color(border_colors_[0],
+        border_colors_[1], border_colors_[2], border_colors_[3]);
+    pass->setAmbient(ambient_color);
 
-        Ogre::ColourValue specular_color(1.0f, 1.0f, 1.0f, 1.0f);
-        pass->setSpecular(specular_color);
+    Ogre::ColourValue specular_color(1.0f, 1.0f, 1.0f, 1.0f);
+    pass->setSpecular(specular_color);
 
-        Ogre::Real shininess = 64.0f;
-        pass->setShininess(shininess);
+    Ogre::Real shininess = 64.0f;
+    pass->setShininess(shininess);
 
-        pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+    pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+    mesh_materials_->setCullingMode(Ogre::CULL_NONE);
+  }
 
-        mesh_materials_[index]->setCullingMode(Ogre::CULL_NONE);
-    }
-
-    mesh_nodes_[index] = this->scene_node_->createChildSceneNode();
-
+  mesh_nodes_ = this->scene_node_->createChildSceneNode();
 }
 
 void MeshDisplayCustom::onEnable()
 {
-    subscribe();
+  subscribe();
 }
 
 void MeshDisplayCustom::onDisable()
 {
-    unsubscribe();
+  unsubscribe();
 }
 
-void MeshDisplayCustom::update( float wall_dt, float ros_dt )
+void MeshDisplayCustom::preRenderTargetUpdate(const Ogre::RenderTargetEvent& evt)
 {
-    time_since_last_transform_ += wall_dt;
-
-    if( !display_images_topic_property_->getTopic().isEmpty() )
-    {
-        try
-        {
-            for (int i=0; i<textures_.size(); i++)
-            {
-                updateCamera(i, textures_[i]->update());
-            }
-        }
-        catch( UnsupportedImageEncoding& e )
-        {
-            setStatus(StatusProperty::Error, "Display Image", e.what());
-        }
-    }
 }
 
-bool MeshDisplayCustom::updateCamera(int index, bool update_image)
+void MeshDisplayCustom::update(float wall_dt, float ros_dt)
 {
-    if(update_image)
+  if (cur_image_)
+  {
+    // need to run these every frame in case tf has changed,
+    // but could detect that.
+    try
     {
-        last_images_[index] = textures_[index]->getImage();
+      constructQuads(cur_image_);
     }
-
-    if(!img_heights_[index] || !img_widths_[index] || 
-       !physical_widths_[index] || !physical_heights_[index] || 
-       !last_images_[index])
-    {        
-        return false;
-    }
-
-    boost::mutex::scoped_lock lock( mesh_mutex_ );
-
-    float img_width  = img_widths_[index];
-    float img_height = img_heights_[index];
-
-    Ogre::Vector3 position;
-    Ogre::Quaternion orientation;
-
-    context_->getFrameManager()->getTransform( last_images_[index]->header.frame_id, last_images_[index]->header.stamp, position, orientation );
-
-    Eigen::Affine3d trans_mat;
-    tf::poseMsgToEigen(mesh_poses_[index], trans_mat);
-
-    // Rotate by 90 deg to get xz plane
-    trans_mat = trans_mat * Eigen::Quaterniond(0.70710678, -0.70710678f, 0.0f, 0.0f);
-
-    float z_offset = (img_width > img_height) ? img_width : img_height;
-    float scale_factor = 1.0f / (physical_widths_[index] > physical_heights_[index] ? physical_widths_[index] : physical_heights_[index]);
-
-    Eigen::Vector4d projector_origin(0.0f, 0.0f, 1.0f / (z_offset * scale_factor), 1.0f);
-    Eigen::Vector4d projector_point = trans_mat.matrix() * projector_origin;
-
-    position = Ogre::Vector3(projector_point[0], projector_point[1], projector_point[2] );
-    orientation = Ogre::Quaternion(mesh_poses_[index].orientation.w, mesh_poses_[index].orientation.x, mesh_poses_[index].orientation.y, mesh_poses_[index].orientation.z);
-
-    // Update orientation with 90 deg offset (xy to xz)
-    orientation = orientation * Ogre::Quaternion( Ogre::Degree( -90 ), Ogre::Vector3::UNIT_X );
-
-    // convert vision (Z-forward) frame to ogre frame (Z-out)
-    orientation = orientation * Ogre::Quaternion( Ogre::Degree( 180 ), Ogre::Vector3::UNIT_Z );
-
-
-    // std::cout << "CameraInfo dimensions: " << last_info_->width << " x " << last_info_->height << std::endl;
-    // std::cout << "Texture dimensions: " << last_image_->width << " x " << last_image_->height << std::endl;
-    //std::cout << "Original image dimensions: " << last_image_->width*full_image_binning_ << " x " << last_image_->height*full_image_binning_ << std::endl;
-
-    // If the image width/height is 0 due to a malformed caminfo, try to grab the width from the image.
-    if( img_width <= 0 )
+    catch (std::string& e)
     {
-      ROS_ERROR( "Malformed CameraInfo on camera [%s], width = 0", qPrintable( getName() ));
-      // use texture size, but have to remove border from the perspective calculations
-      img_width = textures_[index]->getWidth()-2;
+      setStatus(StatusProperty::Error, "Display Image", e.c_str());
+      return;
     }
-
-    if (img_height <= 0)
+    catch (cv_bridge::Exception& e)
     {
-        ROS_ERROR( "Malformed CameraInfo on camera [%s], height = 0", qPrintable( getName() ));
-        // use texture size, but have to remove border from the perspective calculations
-        img_height = textures_[index]->getHeight()-2;
+      setStatus(StatusProperty::Error, "Display Image", e.what());
+      return;
     }
+    updateMeshProperties();
+    // TODO(lucasw) do what is necessary for new image, but separate
+    // other stuff.
+    new_image_ = false;
+  }
 
-    // if even the texture has 0 size, return
-    if( img_height <= 0.0 || img_width <= 0.0 )
+  if (textures_ && !image_topic_property_->getTopic().isEmpty())
+  {
+    try
     {
-        setStatus( StatusProperty::Error, "Camera Info",
-                 "Could not determine width/height of image due to malformed CameraInfo (either width or height is 0) and texture." );
-        return false;
+      updateCamera(textures_->update());
     }
-
-    // projection matrix
-    float P[12] = {1.0, 0.0, img_width / 2.0f, 0.0, 
-                   0.0, 1.0, img_height / 2.0f, 0.0, 
-                   0.0, 0.0, 1.0, 0.0 };
-
-    // calculate projection matrix
-    double fx = P[0];
-    double fy = P[5];
-
-    // Add the camera's translation relative to the left camera (from P[3]);
-    double tx = -1 * (P[3] / fx);
-    Ogre::Vector3 right = orientation * Ogre::Vector3::UNIT_X;
-    position = position + (right * tx);
-
-    double ty = -1 * (P[7] / fy);
-    Ogre::Vector3 down = orientation * Ogre::Vector3::UNIT_Y;
-    position = position + (down * ty);
-
-    if( !validateFloats( position ))
+    catch (UnsupportedImageEncoding& e)
     {
-        ROS_ERROR( "position error");
-        setStatus( StatusProperty::Error, "Camera Info", "CameraInfo/P resulted in an invalid position calculation (nans or infs)" );
-        return false;
+      setStatus(StatusProperty::Error, "Display Image", e.what());
+      return;
     }
-
-    if(projector_nodes_[index] != NULL)
+    catch (std::string& e)
     {
-        projector_nodes_[index]->setPosition( position );
-        projector_nodes_[index]->setOrientation( orientation );
+      setStatus(StatusProperty::Error, "Display Image", e.c_str());
+      return;
     }
+  }
+  setStatus(StatusProperty::Ok, "Display Image", "ok");
+}
 
-    // calculate the projection matrix
-    double cx = P[2];
-    double cy = P[6];
+void MeshDisplayCustom::updateCamera(bool update_image)
+{
+  int index = 0;
+  if (update_image)
+  {
+    last_images_[index] = textures_->getImage();
+  }
 
-    double far_plane = 100;
-    double near_plane = 0.01;
+  if (!img_heights_ || !img_widths_ ||
+      !physical_widths_ || !physical_heights_ ||
+      !last_images_[index])
+  {
+    throw("sizes or image not ready");
+    // return false;
+  }
 
-    Ogre::Matrix4 proj_matrix;
-    proj_matrix = Ogre::Matrix4::ZERO;
+  boost::mutex::scoped_lock lock(mesh_mutex_);
 
-    proj_matrix[0][0]= 2.0 * fx/img_width;
-    proj_matrix[1][1]= 2.0 * fy/img_height;
+  float img_width  = img_widths_;
+  float img_height = img_heights_;
 
-    proj_matrix[0][2]= 2.0 * (0.5 - cx/img_width);
-    proj_matrix[1][2]= 2.0 * (cy/img_height - 0.5);
+  Ogre::Vector3 position;
+  Ogre::Quaternion orientation;
 
-    proj_matrix[2][2]= -(far_plane+near_plane) / (far_plane-near_plane);
-    proj_matrix[2][3]= -2.0*far_plane*near_plane / (far_plane-near_plane);
+  context_->getFrameManager()->getTransform(last_images_[index]->header.frame_id,
+      last_images_[index]->header.stamp, position, orientation);
 
-    proj_matrix[3][2]= -1;
+  Eigen::Affine3d trans_mat;
+  tf::poseMsgToEigen(mesh_poses_[index], trans_mat);
 
-    if(decal_frustums_[index] != NULL)
-        decal_frustums_[index]->setCustomProjectionMatrix(true, proj_matrix);
+  // Rotate by 90 deg to get xz plane
+  trans_mat = trans_mat * Eigen::Quaterniond(0.70710678, -0.70710678f, 0.0f, 0.0f);
 
-    // ROS_INFO(" Camera (%f, %f)", proj_matrix[0][0], proj_matrix[1][1]);
-    // ROS_INFO(" Render Panel: %x   Viewport: %x", render_panel_, render_panel_->getViewport());
+  float z_offset = (img_width > img_height) ? img_width : img_height;
+  float scale_factor = 1.0f /
+      ((physical_widths_ > physical_heights_) ?
+       physical_widths_ : physical_heights_);
+
+  Eigen::Vector4d projector_origin(0.0f, 0.0f, 1.0f / (z_offset * scale_factor), 1.0f);
+  Eigen::Vector4d projector_point = trans_mat.matrix() * projector_origin;
+
+  position = Ogre::Vector3(projector_point[0], projector_point[1], projector_point[2]);
+  orientation = Ogre::Quaternion(mesh_poses_[index].orientation.w,
+      mesh_poses_[index].orientation.x, mesh_poses_[index].orientation.y,
+      mesh_poses_[index].orientation.z);
+
+  // Update orientation with 90 deg offset (xy to xz)
+  orientation = orientation * Ogre::Quaternion(Ogre::Degree(-90), Ogre::Vector3::UNIT_X);
+
+  // convert vision (Z-forward) frame to ogre frame (Z-out)
+  orientation = orientation * Ogre::Quaternion(Ogre::Degree(180), Ogre::Vector3::UNIT_Z);
 
 
-    setStatus( StatusProperty::Ok, "Time", "ok" );
-    setStatus( StatusProperty::Ok, "Camera Info", "ok" );
+  // std::cout << "CameraInfo dimensions: " << last_info_->width << " x " << last_info_->height << std::endl;
+  // std::cout << "Texture dimensions: " << last_image_->width << " x " << last_image_->height << std::endl;
+  // std::cout << "Original image dimensions: "
+  //    << last_image_->width*full_image_binning_ << " x "
+  //    << last_image_->height*full_image_binning_ << std::endl;
 
-    if(mesh_nodes_[index] != NULL && filter_frustums_[index].size() == 0 && !mesh_materials_[index].isNull())
-    {
-        createProjector(index);
+  // If the image width/height is 0 due to a malformed caminfo, try to grab the width from the image.
+  if (img_width <= 0)
+  {
+    ROS_ERROR("Malformed CameraInfo on camera [%s], width = 0", qPrintable(getName()));
+    // use texture size, but have to remove border from the perspective calculations
+    img_width = textures_->getWidth() - 2;
+  }
 
-        addDecalToMaterial(index, mesh_materials_[index]->getName());
-    }
+  if (img_height <= 0)
+  {
+    ROS_ERROR("Malformed CameraInfo on camera [%s], height = 0", qPrintable(getName()));
+    // use texture size, but have to remove border from the perspective calculations
+    img_height = textures_->getHeight() - 2;
+  }
 
-    return true;
+  // if even the texture has 0 size, return
+  if (img_height <= 0.0 || img_width <= 0.0)
+  {
+    std::string text = "Could not determine width/height of image due to malformed ";
+    text += "CameraInfo (either width or height is 0) and texture.";
+    throw text;
+  }
+
+  // projection matrix
+  float P[12] =
+  {
+      1.0, 0.0, img_width / 2.0f, 0.0,
+      0.0, 1.0, img_height / 2.0f, 0.0,
+      0.0, 0.0, 1.0, 0.0
+  };
+
+  // calculate projection matrix
+  double fx = P[0];
+  double fy = P[5];
+
+  // Add the camera's translation relative to the left camera (from P[3]);
+  double tx = -1 * (P[3] / fx);
+  Ogre::Vector3 right = orientation * Ogre::Vector3::UNIT_X;
+  position = position + (right * tx);
+
+  double ty = -1 * (P[7] / fy);
+  Ogre::Vector3 down = orientation * Ogre::Vector3::UNIT_Y;
+  position = position + (down * ty);
+
+  if (!validateFloats(position))
+  {
+    throw "CameraInfo/P resulted in an invalid position calculation (nans or infs)";
+  }
+
+  if (projector_nodes_ != NULL)
+  {
+    projector_nodes_->setPosition(position);
+    projector_nodes_->setOrientation(orientation);
+  }
+
+  // calculate the projection matrix
+  double cx = P[2];
+  double cy = P[6];
+
+  double far_plane = 100;
+  double near_plane = 0.01;
+
+  Ogre::Matrix4 proj_matrix;
+  proj_matrix = Ogre::Matrix4::ZERO;
+
+  proj_matrix[0][0] = 2.0 * fx / img_width;
+  proj_matrix[1][1] = 2.0 * fy / img_height;
+
+  proj_matrix[0][2] = 2.0 * (0.5 - cx / img_width);
+  proj_matrix[1][2] = 2.0 * (cy / img_height - 0.5);
+
+  proj_matrix[2][2] = -(far_plane + near_plane) / (far_plane - near_plane);
+  proj_matrix[2][3] = -2.0 * far_plane * near_plane / (far_plane - near_plane);
+
+  proj_matrix[3][2] = -1;
+
+  if (decal_frustums_ != NULL)
+    decal_frustums_->setCustomProjectionMatrix(true, proj_matrix);
+
+  // ROS_INFO(" Camera (%f, %f)", proj_matrix[0][0], proj_matrix[1][1]);
+  // ROS_INFO(" Render Panel: %x   Viewport: %x", render_panel_, render_panel_->getViewport());
+
+  setStatus(StatusProperty::Ok, "Time", "ok");
+  setStatus(StatusProperty::Ok, "Camera Info", "ok");
+
+  if (mesh_nodes_ != NULL && filter_frustums_.size() == 0 && !mesh_materials_.isNull())
+  {
+    createProjector(index);
+
+    addDecalToMaterial(index, mesh_materials_->getName());
+  }
 }
 
 void MeshDisplayCustom::clear()
 {
-    for (int i=0; i<textures_.size(); i++)
-    {
-        textures_[i]->clear();
-    }
+  textures_->clear();
 
-    context_->queueRender();
+  context_->queueRender();
 
-    setStatus( StatusProperty::Warn, "Image", "No Image received");
+  setStatus(StatusProperty::Warn, "Image", "No Image received");
 }
 
 void MeshDisplayCustom::reset()
 {
-    Display::reset();
-    clear();
+  Display::reset();
+  clear();
 }
 
 void MeshDisplayCustom::processImage(int index, const sensor_msgs::Image& msg)
 {
-    //std::cout<<"camera image received"<<std::endl;
-    cv_bridge::CvImagePtr cv_ptr;
+  // std::cout<<"camera image received"<<std::endl;
+  cv_bridge::CvImagePtr cv_ptr;
 
-    // simply converting every image to RGBA
-    try
-    {
-        cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::RGBA8);
-    }
-    catch (cv_bridge::Exception& e)
-    {
-        ROS_ERROR("MeshDisplayCustom: cv_bridge exception: %s", e.what());
-        return;
-    }
+  // simply converting every image to RGBA
+  cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::RGBA8);
 
-    // update image alpha
-    // for(int i = 0; i < cv_ptr->image.rows; i++)
-    // {
-    //     for(int j = 0; j < cv_ptr->image.cols; j++)
-    //     {
-    //         cv::Vec4b& pixel = cv_ptr->image.at<cv::Vec4b>(i,j);
-    //         pixel[3] = image_alpha_property_->getFloat()*255;
-    //     }
-    // }
+  // make image transparent if transparency property is set
+  if (image_transparent_property_ == 1)
+  for(int i = 0; i < cv_ptr->image.rows; i++)
+  {
+      for(int j = 0; j < cv_ptr->image.cols; j++)
+      {
+          cv::Vec4b& pixel = cv_ptr->image.at<cv::Vec4b>(i,j);
+          pixel[3] = 0;
+      }
+  }
 
-    // add completely white transparent border to the image so that it won't replicate colored pixels all over the mesh
-    cv::Scalar value(255,255,255,0);
-    cv::copyMakeBorder(cv_ptr->image,cv_ptr->image,1,1,1,1,cv::BORDER_CONSTANT,value);
-    cv::flip(cv_ptr->image,cv_ptr->image,-1);
+  // add completely white transparent border to the image so that it won't 
+  // replicate colored pixels all over the mesh
+  cv::Scalar value(255, 255, 255, 0);
+  cv::copyMakeBorder(cv_ptr->image, cv_ptr->image, 1, 1, 1, 1, cv::BORDER_CONSTANT, value);
+  cv::flip(cv_ptr->image, cv_ptr->image, -1);
 
-    // Output modified video stream
-    if (textures_[index] == NULL)
-        textures_[index] = new ROSImageTexture();
+  // Output modified video stream
+  if (textures_ == NULL)
+    textures_ = new ROSImageTexture();
 
-    textures_[index]->addMessage(cv_ptr->toImageMsg());
+  textures_->addMessage(cv_ptr->toImageMsg());
 }
 
-} // namespace rviz
+}  // namespace rviz
+
+#include <pluginlib/class_list_macros.h>
+PLUGINLIB_EXPORT_CLASS(rviz::MeshDisplayCustom, rviz::Display)

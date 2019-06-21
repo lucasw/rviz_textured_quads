@@ -1,12 +1,4 @@
-/*
- * MeshDisplayCustom declaration.
- *
- * Author: Felipe Bacim.
- *
- * help with selection of robot parts 
- */
-/*
- * Copyright (c) 2008, Willow Garage, Inc.
+/* Copyright (c) 2013-2015 Team ViGIR ( TORC Robotics LLC, TU Darmstadt, Virginia Tech, Oregon State University, Cornell University, and Leibniz University Hanover )
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,51 +26,47 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef RVIZ_MESH_DISPLAY_H
-#define RVIZ_MESH_DISPLAY_H
+#ifndef RVIZ_TEXTURED_QUADS_MESH_DISPLAY_CUSTOM_H
+#define RVIZ_TEXTURED_QUADS_MESH_DISPLAY_CUSTOM_H
 
-#include "rviz/display.h"
-#include "rviz/frame_manager.h"
-#include "rviz/image/image_display_base.h"
-#include "rviz/image/ros_image_texture.h"
-
-#include <image_transport/image_transport.h>
-#include <sensor_msgs/CameraInfo.h>
-#include <message_filters/subscriber.h>
-#include <tf/message_filter.h>
-
-#include <geometry_msgs/Pose.h>
-#include <geometry_msgs/PoseStamped.h>
-#include <shape_msgs/Mesh.h>
-#include <std_msgs/Float64.h>
-
-#include <tf/transform_listener.h>
-
-#include <OGRE/OgreVector3.h>
-#include "OGRE/OgreRoot.h"
-#include "OGRE/OgreRenderSystem.h"
-#include "OGRE/OgreRenderWindow.h"
-#include "OGRE/OgreWindowEventUtilities.h"
-#include "OGRE/OgreManualObject.h"
-#include "OGRE/OgreEntity.h"
-#include <OGRE/OgreSceneNode.h>
-#include <OGRE/OgreRenderTargetListener.h>
-#include <OGRE/OgreRenderQueueListener.h>
-
-#include <rviz_textured_quads/TexturedQuad.h>
-#include <rviz_textured_quads/TexturedQuadArray.h>
+#include <QObject>
+// kinetic compatibility http://answers.ros.org/question/233786/parse-error-at-boost_join/
+#ifndef Q_MOC_RUN
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
-
-#include <tf/tf.h>
-#include <tf_conversions/tf_eigen.h>
+#include <OGRE/OgreEntity.h>
+#include <OGRE/OgreManualObject.h>
+#include <OGRE/OgreRenderQueueListener.h>
+#include <OGRE/OgreRenderSystem.h>
+#include <OGRE/OgreRenderTargetListener.h>
+#include <OGRE/OgreRenderWindow.h>
+#include <OGRE/OgreRoot.h>
+#include <OGRE/OgreSceneNode.h>
+#include <OGRE/OgreVector3.h>
+#include <OGRE/OgreWindowEventUtilities.h>
 #include <eigen_conversions/eigen_msg.h>
-
+#include <geometry_msgs/Pose.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <image_transport/image_transport.h>
 #include <map>
+#include <message_filters/subscriber.h>
+#include <rviz/display.h>
+#include <rviz/frame_manager.h>
+#include <rviz/image/image_display_base.h>
+#include <rviz/image/ros_image_texture.h>
+#include <sensor_msgs/CameraInfo.h>
+#include <sensor_msgs/Image.h>
+#include <shape_msgs/Mesh.h>
+// #include <std_msgs/Float64.h>
+#include <std_msgs/String.h>
+#include <tf/message_filter.h>
+#include <tf/tf.h>
+#include <tf/transform_listener.h>
+#include <tf_conversions/tf_eigen.h>
 #include <vector>
 
-#include "text_node.h"
+#endif  // Q_MOC_RUN
 
 namespace Ogre
 {
@@ -89,18 +77,10 @@ class ManualObject;
 
 namespace rviz
 {
-class Axes;
-class RenderPanel;
 class FloatProperty;
+class RenderPanel;
 class RosTopicProperty;
-class ColorProperty;
-class VectorProperty;
-class StringProperty;
-class QuaternionProperty;
-}
-
-namespace rviz
-{
+class TfFrameProperty;
 
 /**
  * \class MeshDisplayCustom
@@ -108,22 +88,26 @@ namespace rviz
  */
 class MeshDisplayCustom: public rviz::Display,  public Ogre::RenderTargetListener, public Ogre::RenderQueueListener
 {
-Q_OBJECT
+  Q_OBJECT
 public:
   MeshDisplayCustom();
   virtual ~MeshDisplayCustom();
 
   // Overrides from Display
   virtual void onInitialize();
-  virtual void update( float wall_dt, float ros_dt );
+  virtual void update(float wall_dt, float ros_dt);
   virtual void reset();
+
+  virtual void preRenderTargetUpdate(const Ogre::RenderTargetEvent& evt);
 
 private Q_SLOTS:
   void updateMeshProperties();
+  void updateImageTopic();
+  void updateDisplayImageTopic();
   void updateDisplayImages();
 
 protected:
-  virtual void load(int index);
+  virtual void load();
 
   // overrides from Display
   virtual void onEnable();
@@ -132,62 +116,63 @@ protected:
   // This is called by incomingMessage().
   void processImage(int index, const sensor_msgs::Image& msg);
 
+  virtual void subscribeselector();
+  virtual void unsubscribeselector();
   virtual void subscribe();
   virtual void unsubscribe();
 
 private:
   void clear();
-  bool updateCamera(int index, bool update_image);
+  void updateCamera(bool update_image);
 
   void createProjector(int index);
   void addDecalToMaterial(int index, const Ogre::String& matName);
-  void updateImageMeshes( const rviz_textured_quads::TexturedQuadArray::ConstPtr& images );
-  
-  void constructQuads( const rviz_textured_quads::TexturedQuadArray::ConstPtr& images );
-  shape_msgs::Mesh constructMesh( geometry_msgs::Pose mesh_origin, float width, float height, float border_size );
-  void clearStates(int num_quads);
 
-  float time_since_last_transform_;
+  void updateImageTopic (const std_msgs::String& imagetopic);
+  void updateImage(const sensor_msgs::Image::ConstPtr& image);
+  void constructQuads(const sensor_msgs::Image::ConstPtr& images);
 
-  RosTopicProperty* display_images_topic_property_;
-  ColorProperty* text_color_property_;
-  FloatProperty* text_height_property_;
-  FloatProperty* text_bottom_offset_;
+  shape_msgs::Mesh constructMesh(geometry_msgs::Pose mesh_origin, float width, float height, float border_size);
+  void clearStates();
+
+  uint8_t image_transparent_property_;
+  RosTopicProperty* image_topic_selector_property_;
+  RosTopicProperty* image_topic_property_;
+  TfFrameProperty* tf_frame_property_;
+  FloatProperty* meters_per_pixel_property_;
+  ros::Subscriber image_topic_sub_;
+  ros::Subscriber image_sub_;
 
   std::vector<shape_msgs::Mesh> last_meshes_;
   std::vector<geometry_msgs::Pose> mesh_poses_;
-  std::vector<int> img_widths_, img_heights_;
-  std::vector<float> physical_widths_, physical_heights_;
-  std::vector<std::vector<float> > border_colors_;
-  std::vector<float> border_sizes_;
-  std::vector<rviz_textured_quads::TextNode*> text_nodes_;
+  int img_widths_, img_heights_;
+  float physical_widths_, physical_heights_;
+  std::vector<float> border_colors_;
+  float border_sizes_;
 
   ros::NodeHandle nh_;
 
+  bool new_image_;
+  sensor_msgs::Image::ConstPtr cur_image_;
   std::vector<sensor_msgs::Image::ConstPtr> last_images_;
 
-  std::vector<Ogre::SceneNode*> mesh_nodes_;
-  std::vector<Ogre::ManualObject*> manual_objects_;
-  std::vector<Ogre::MaterialPtr> mesh_materials_;
-  std::vector<ROSImageTexture*> textures_;
+  Ogre::SceneNode* mesh_nodes_;
+  Ogre::ManualObject* manual_objects_;
+  Ogre::MaterialPtr mesh_materials_;
+  ROSImageTexture* textures_;
 
-  ros::Subscriber pose_sub_;
-  ros::Subscriber rviz_display_images_sub_;
+  Ogre::Frustum* decal_frustums_;
+  // need multiple filters (back, up, down, left, right)
+  std::vector<Ogre::Frustum*> filter_frustums_;
+  Ogre::SceneNode* projector_nodes_;
 
-  std::vector<Ogre::Frustum*> decal_frustums_;
-  std::vector<std::vector<Ogre::Frustum*> > filter_frustums_; //need multiple filters (back, up, down, left, right)
-  std::vector<Ogre::SceneNode*> projector_nodes_;
-
-  std::vector<RenderPanel*> render_panel_list_;
-  RenderPanel* render_panel_; // this is the active render panel
-
-  bool initialized_;
+  RenderPanel* render_panel_;  // this is the active render panel
 
   boost::mutex mesh_mutex_;
 };
 
-} // namespace rviz
+}  // namespace rviz
 
-#endif
+#endif  // RVIZ_TEXTURED_QUADS_MESH_DISPLAY_CUSTOM_H
 
 

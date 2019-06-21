@@ -1,5 +1,5 @@
-<library path="librviz_textured_quads_custom">
-  <class name="rviz/MeshDisplayCustom"
+<library path="lib/librviz_textured_quads">
+  <class name="rviz_textured_quads/MeshDisplayCustom"
          type="rviz::MeshDisplayCustom"
          base_class_type="rviz::Display">
     <description>
